@@ -1,0 +1,43 @@
+# Corridor Worker - Fly.io Configuration
+# Scale-to-zero scheduled worker
+
+app = "corridor-worker"
+primary_region = "den"  # Denver - closest to CDOT and users
+
+[build]
+  dockerfile = "Dockerfile"
+  # Build from repo root to access workspaces
+  # Deploy with: fly deploy --dockerfile apps/worker/Dockerfile
+
+[env]
+  NODE_ENV = "production"
+  TZ = "America/Denver"
+
+# No HTTP service - this is a background worker
+# Triggered by Fly.io Machines scheduler or external cron
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+# Auto-stop when idle (scale-to-zero)
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+# Health check (optional - for monitoring)
+[[services]]
+  protocol = "tcp"
+  internal_port = 8080
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
