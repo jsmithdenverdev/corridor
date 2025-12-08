@@ -56,8 +56,23 @@ export const statusBuffer = pgTable(
   ]
 );
 
+/**
+ * Incident Cache - LLM cost control
+ * Stores normalized incident text by message hash to avoid re-processing
+ */
+export const incidentCache = pgTable('incident_cache', {
+  message_hash: text('message_hash').primaryKey(),
+  normalized_text: text('normalized_text').notNull(),
+  severity_penalty: real('severity_penalty').notNull(),
+  created_at: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 // Type exports for Drizzle queries
 export type LiveDashboardRecord = typeof liveDashboard.$inferSelect;
 export type LiveDashboardInsert = typeof liveDashboard.$inferInsert;
 export type StatusBufferRecord = typeof statusBuffer.$inferSelect;
 export type StatusBufferInsert = typeof statusBuffer.$inferInsert;
+export type IncidentCacheRecord = typeof incidentCache.$inferSelect;
+export type IncidentCacheInsert = typeof incidentCache.$inferInsert;

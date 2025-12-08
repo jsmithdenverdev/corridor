@@ -1,75 +1,80 @@
-/**
- * I-70 Mountain Corridor Segment Definitions
- * MVP Scope: Georgetown to Eisenhower Tunnel (MM 213-228)
- */
-
-export const I70_SEGMENTS = {
-  EISENHOWER_TUNNEL: {
-    id: 'eisenhower-tunnel',
-    name: 'Eisenhower Tunnel',
-    mileMarkers: { start: 213, end: 218 },
-    cameras: ['eisenhower-east', 'eisenhower-west'],
-    description: 'Highest point on the Interstate System (11,158 ft)',
-  },
-  LOVELAND_PASS_AREA: {
-    id: 'loveland-pass-area',
-    name: 'Loveland Pass Area',
-    mileMarkers: { start: 218, end: 223 },
-    cameras: ['loveland-ski-area'],
-    description: 'Ski area and tunnel approach',
-  },
-  SILVER_PLUME: {
-    id: 'silver-plume',
-    name: 'Silver Plume',
-    mileMarkers: { start: 223, end: 228 },
-    cameras: ['silver-plume'],
-    description: 'Historic mining town section',
-  },
-  GEORGETOWN: {
-    id: 'georgetown',
-    name: 'Georgetown',
-    mileMarkers: { start: 228, end: 232 },
-    cameras: ['georgetown-loop', 'georgetown-lake'],
-    description: 'Gateway to the high country',
-  },
-} as const;
-
-export type SegmentKey = keyof typeof I70_SEGMENTS;
-export type Segment = (typeof I70_SEGMENTS)[SegmentKey];
-export type SegmentId = Segment['id'];
+import type { CorridorSegment } from './types';
 
 /**
- * Get all segment IDs for iteration
+ * CDOT API Configuration
  */
-export const SEGMENT_IDS = Object.values(I70_SEGMENTS).map((s) => s.id);
+export const CDOT_API_BASE = 'https://data.cotrip.org/api/v1';
 
 /**
- * Mile marker range for MVP scope
+ * Mile marker range for I-70 Westbound corridor (Georgetown to Tunnel)
  */
-export const MVP_MILE_MARKER_RANGE = {
-  start: 213,
-  end: 232,
+export const CORRIDOR_MILE_MARKERS = {
+  start: 213, // Eisenhower Tunnel
+  end: 228, // Georgetown
 } as const;
 
 /**
- * Find segment by mile marker
+ * Corridor Segments Watchlist
+ *
+ * These are the specific CDOT destinations we track.
+ * The `jsonName` must match exactly what CDOT returns in the API.
  */
-export function getSegmentByMileMarker(
-  mileMarker: number
-): Segment | undefined {
-  return Object.values(I70_SEGMENTS).find(
-    (segment) =>
-      mileMarker >= segment.mileMarkers.start &&
-      mileMarker <= segment.mileMarkers.end
-  );
+export const CORRIDOR_SEGMENTS: CorridorSegment[] = [
+  {
+    logicalName: 'The Gauntlet',
+    jsonName: '070W224 Silverplume Chainup to Tunnel (East Entrance)',
+    distanceMiles: 10.5,
+    freeFlowSeconds: 600, // 10 mins @ 60mph
+  },
+  {
+    logicalName: 'The Approach',
+    jsonName: '070W266 Kipling to Idaho Springs',
+    distanceMiles: 25.0,
+    freeFlowSeconds: 1500, // 25 mins @ 60mph
+  },
+];
+
+/**
+ * Get segment by logical name
+ */
+export function getSegmentByName(name: string): CorridorSegment | undefined {
+  return CORRIDOR_SEGMENTS.find((s) => s.logicalName === name);
 }
 
 /**
- * Get segment by ID
+ * Get segment by CDOT JSON name
  */
-export function getSegmentById(id: string): Segment | undefined {
-  return Object.values(I70_SEGMENTS).find((segment) => segment.id === id);
+export function getSegmentByJsonName(
+  jsonName: string
+): CorridorSegment | undefined {
+  return CORRIDOR_SEGMENTS.find((s) => s.jsonName === jsonName);
 }
+
+/**
+ * Speed anomaly threshold
+ * If implied speed exceeds this, treat as bad data
+ */
+export const MAX_REASONABLE_SPEED_MPH = 85;
+
+/**
+ * Vibe score penalties
+ */
+export const VIBE_PENALTIES = {
+  /** Lane closure penalty */
+  LANE_CLOSURE: 2,
+  /** Full road closure penalty */
+  ROAD_CLOSURE: 5,
+  /** Icy/Snow road condition penalty */
+  ICY_CONDITIONS: 1,
+} as const;
+
+/**
+ * Weather sensor types we care about
+ */
+export const RELEVANT_WEATHER_SENSORS = [
+  'road surface status',
+  'wind gust',
+] as const;
 
 /**
  * Camera configuration

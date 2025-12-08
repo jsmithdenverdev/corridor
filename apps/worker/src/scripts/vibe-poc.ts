@@ -1,43 +1,86 @@
 #!/usr/bin/env bun
 /**
- * Vibe Check Proof of Concept
+ * Incident Normalization Proof of Concept
  *
- * Tests the Claude integration with sample data.
+ * Tests the Claude integration for incident text normalization.
  * Run with: bun run vibe-poc
  */
 
-import { VibeChecker } from '../ai/client';
+import { IncidentNormalizer } from '../ai/client';
+import type { CdotIncident } from '@corridor/shared';
 
-const TEST_CASES = [
+// Mock incidents with typical CDOT message formats
+const TEST_INCIDENTS: CdotIncident[] = [
   {
-    name: 'Eisenhower Tunnel',
-    speed: 45,
-    conditions: `Road Condition: Clear and Dry
-Active Incidents (1):
-- Vehicle accident cleared, minor delays expected for next 30 minutes [MM 215]`,
+    type: 'Feature',
+    properties: {
+      id: 'test-1',
+      type: 'accident',
+      severity: 'major',
+      travelerInformationMessage:
+        'ACCIDENT-I70 WB @ MP 213.5 NEAR EISENHOWER TUNNEL - LEFT LANE BLOCKED - EXPECT DELAYS',
+      startMarker: 213,
+      endMarker: 214,
+      lastUpdated: new Date().toISOString(),
+    },
   },
   {
-    name: 'Georgetown',
-    speed: 25,
-    conditions: `Road Condition: Snow Packed
-Active Incidents (2):
-- Traction Law in Effect (Severity: Moderate) [MM 230]
-- Slow moving traffic due to weather [MM 229]`,
+    type: 'Feature',
+    properties: {
+      id: 'test-2',
+      type: 'closure',
+      severity: 'major',
+      travelerInformationMessage:
+        'ROAD CLOSED - I70 WB BETWEEN SILVER PLUME (MM 226) AND TUNNEL (MM 213) DUE TO AVALANCHE CONTROL OPERATIONS - ESTIMATED REOPENING 2 PM',
+      startMarker: 213,
+      endMarker: 226,
+      lastUpdated: new Date().toISOString(),
+    },
   },
   {
-    name: 'Silver Plume',
-    speed: 65,
-    conditions: `Road Condition: Clear and Dry
-No active incidents reported.`,
+    type: 'Feature',
+    properties: {
+      id: 'test-3',
+      type: 'restriction',
+      severity: 'moderate',
+      travelerInformationMessage:
+        'TRACTION LAW IN EFFECT (CODE 15) - I70 WB FROM IDAHO SPRINGS TO EISENHOWER TUNNEL - 4WD/AWD OR CHAINS REQUIRED',
+      startMarker: 213,
+      endMarker: 240,
+      lastUpdated: new Date().toISOString(),
+    },
   },
   {
-    name: 'Loveland Pass Area',
-    speed: null,
-    conditions: `Road Condition: Unknown
-Active Incidents (1):
-- Road Closed due to avalanche control [MM 220]`,
+    type: 'Feature',
+    properties: {
+      id: 'test-4',
+      type: 'information',
+      severity: 'minor',
+      travelerInformationMessage:
+        'FYI - CONSTRUCTION CREW PRESENT I70 WB MM 228 - PLEASE USE CAUTION',
+      startMarker: 227,
+      endMarker: 229,
+      lastUpdated: new Date().toISOString(),
+    },
   },
 ];
+
+// Simple in-memory cache for POC
+const memoryCache = new Map<string, { summary: string; penalty: number }>();
+
+async function getCached(
+  hash: string
+): Promise<{ summary: string; penalty: number } | null> {
+  return memoryCache.get(hash) ?? null;
+}
+
+async function setCache(
+  hash: string,
+  summary: string,
+  penalty: number
+): Promise<void> {
+  memoryCache.set(hash, { summary, penalty });
+}
 
 async function main() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -50,32 +93,40 @@ async function main() {
     process.exit(1);
   }
 
-  console.log('=== Corridor Vibe Check POC ===\n');
+  console.log('=== Incident Normalization POC ===\n');
 
-  const checker = new VibeChecker({ apiKey });
+  const normalizer = new IncidentNormalizer({ apiKey });
 
-  for (const testCase of TEST_CASES) {
-    console.log(`Testing: ${testCase.name}`);
-    console.log('-'.repeat(40));
+  console.log('Testing incident normalization...\n');
 
-    try {
-      const result = await checker.getVibeScore(
-        testCase.name,
-        testCase.speed,
-        testCase.conditions
-      );
+  const { normalized, newCount, cachedCount } =
+    await normalizer.normalizeIncidents(TEST_INCIDENTS, getCached, setCache);
 
-      console.log(`  Score: ${result.score}/10`);
-      console.log(`  Summary: ${result.summary}`);
-      console.log(`  Fallback: ${result.usedFallback ? 'Yes' : 'No'}`);
-    } catch (error) {
-      console.error(`  Error: ${error}`);
-    }
-
+  for (const incident of normalized) {
+    console.log(`ID: ${incident.id}`);
+    console.log(`  Original: ${incident.originalMessage.substring(0, 60)}...`);
+    console.log(`  Summary:  ${incident.summary}`);
+    console.log(`  Penalty:  -${incident.penalty} points`);
+    console.log(`  Severity: ${incident.severity}`);
     console.log();
   }
 
-  console.log('=== POC Complete ===');
+  console.log('-'.repeat(50));
+  console.log(`Normalized: ${newCount} new, ${cachedCount} cached\n`);
+
+  // Test caching - run again
+  console.log('Running again to test caching...\n');
+  const { newCount: newCount2, cachedCount: cachedCount2 } =
+    await normalizer.normalizeIncidents(TEST_INCIDENTS, getCached, setCache);
+
+  console.log(`Result: ${newCount2} new, ${cachedCount2} cached`);
+  console.log(
+    cachedCount2 === TEST_INCIDENTS.length
+      ? 'Cache working correctly!'
+      : 'Cache may have issues'
+  );
+
+  console.log('\n=== POC Complete ===');
 }
 
 main().catch((error) => {
