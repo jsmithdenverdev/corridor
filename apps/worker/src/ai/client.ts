@@ -118,12 +118,28 @@ Raw message: "${message}"`;
   return parseResponse(textContent.text);
 };
 
+/**
+ * Extended incident data for audit trail
+ */
+export type NormalizedIncidentWithAudit = NormalizedIncident & {
+  incidentType: string;
+  startMarker: number;
+  endMarker: number;
+  fromCache: boolean;
+  cacheHash: string;
+};
+
 export type IncidentNormalizer = {
   normalizeIncidents: (
     incidents: CdotIncident[],
     getCached: (hash: string) => Promise<{ summary: string; penalty: number } | null>,
     setCache: (hash: string, summary: string, penalty: number) => Promise<void>
-  ) => Promise<{ normalized: NormalizedIncident[]; newCount: number; cachedCount: number }>;
+  ) => Promise<{
+    normalized: NormalizedIncident[];
+    normalizedWithAudit: NormalizedIncidentWithAudit[];
+    newCount: number;
+    cachedCount: number;
+  }>;
 };
 
 /**
@@ -147,8 +163,14 @@ export const createIncidentNormalizer = (
       incidents: CdotIncident[],
       getCached: (hash: string) => Promise<{ summary: string; penalty: number } | null>,
       setCache: (hash: string, summary: string, penalty: number) => Promise<void>
-    ): Promise<{ normalized: NormalizedIncident[]; newCount: number; cachedCount: number }> => {
+    ): Promise<{
+      normalized: NormalizedIncident[];
+      normalizedWithAudit: NormalizedIncidentWithAudit[];
+      newCount: number;
+      cachedCount: number;
+    }> => {
       const normalized: NormalizedIncident[] = [];
+      const normalizedWithAudit: NormalizedIncidentWithAudit[] = [];
       let newCount = 0;
       let cachedCount = 0;
 
@@ -161,12 +183,21 @@ export const createIncidentNormalizer = (
 
         if (cached) {
           // Use cached normalization
-          normalized.push({
+          const base = {
             id: incident.properties.id,
             originalMessage: message,
             summary: cached.summary,
             penalty: cached.penalty,
             severity: incident.properties.severity,
+          };
+          normalized.push(base);
+          normalizedWithAudit.push({
+            ...base,
+            incidentType: incident.properties.type,
+            startMarker: incident.properties.startMarker,
+            endMarker: incident.properties.endMarker,
+            fromCache: true,
+            cacheHash: hash,
           });
           cachedCount++;
           continue;
@@ -184,12 +215,21 @@ export const createIncidentNormalizer = (
           // Cache the result
           await setCache(hash, result.summary, result.penalty);
 
-          normalized.push({
+          const base = {
             id: incident.properties.id,
             originalMessage: message,
             summary: result.summary,
             penalty: result.penalty,
             severity: incident.properties.severity,
+          };
+          normalized.push(base);
+          normalizedWithAudit.push({
+            ...base,
+            incidentType: incident.properties.type,
+            startMarker: incident.properties.startMarker,
+            endMarker: incident.properties.endMarker,
+            fromCache: false,
+            cacheHash: hash,
           });
           newCount++;
         } catch (error) {
@@ -202,18 +242,27 @@ export const createIncidentNormalizer = (
             incident.properties.severity
           );
 
-          normalized.push({
+          const base = {
             id: incident.properties.id,
             originalMessage: message,
             summary: fallback.summary,
             penalty: fallback.penalty,
             severity: incident.properties.severity,
+          };
+          normalized.push(base);
+          normalizedWithAudit.push({
+            ...base,
+            incidentType: incident.properties.type,
+            startMarker: incident.properties.startMarker,
+            endMarker: incident.properties.endMarker,
+            fromCache: false,
+            cacheHash: hash,
           });
           newCount++;
         }
       }
 
-      return { normalized, newCount, cachedCount };
+      return { normalized, normalizedWithAudit, newCount, cachedCount };
     },
   };
 };

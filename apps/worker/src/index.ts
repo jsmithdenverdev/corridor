@@ -53,10 +53,17 @@ import {
   getRecentBufferEntries,
   cleanupOldBufferEntries,
   cleanupOldCacheEntries,
+  cleanupOldAuditData,
   calculateTrend,
   getCachedIncident,
   setCachedIncident,
+  createWorkerRun,
+  completeWorkerRun,
+  saveCdotSnapshot,
+  saveVibeScoreHistory,
+  saveIncidentHistory,
 } from './db/operations';
+import type { IncidentHistoryData, VibeScoreData } from './db/operations';
 
 import type { WorkerRunResult } from '@corridor/shared';
 import type { CdotAggregator } from './cdot/aggregator';
@@ -98,17 +105,30 @@ const runWorkerLoop = async (deps: WorkerDependencies): Promise<WorkerRunResult>
   let segmentsProcessed = 0;
   let incidentsNormalized = 0;
   let incidentsCached = 0;
+  let incidentsTotal = 0;
 
   console.log(`[${new Date().toISOString()}] Starting Corridor worker...`);
+
+  // Create worker run record for audit trail
+  const runId = await createWorkerRun();
+  console.log(`  Worker run ID: ${runId}`);
 
   try {
     // 1. Fetch all CDOT data
     const rawData = await deps.aggregator.fetchAllData();
 
+    // Save raw CDOT data snapshot for audit
+    await saveCdotSnapshot(runId, {
+      destinations: rawData.destinations,
+      incidents: rawData.incidents,
+      conditions: rawData.conditions,
+      weatherStations: rawData.weatherStations,
+    });
+
     // 2. Normalize incidents (with caching)
     const rawIncidents = deps.aggregator.getRawIncidents(rawData);
 
-    const { normalized, newCount, cachedCount } =
+    const { normalized, normalizedWithAudit, newCount, cachedCount } =
       await deps.normalizer.normalizeIncidents(
         rawIncidents,
         getCachedIncident,
@@ -117,6 +137,24 @@ const runWorkerLoop = async (deps: WorkerDependencies): Promise<WorkerRunResult>
 
     incidentsNormalized = newCount;
     incidentsCached = cachedCount;
+    incidentsTotal = normalized.length;
+
+    // Save incident history for audit
+    if (normalizedWithAudit.length > 0) {
+      const incidentHistoryData: IncidentHistoryData[] = normalizedWithAudit.map((i) => ({
+        cdotIncidentId: i.id,
+        incidentType: i.incidentType,
+        severity: i.severity,
+        startMarker: i.startMarker,
+        endMarker: i.endMarker,
+        originalMessage: i.originalMessage,
+        normalizedSummary: i.summary,
+        penaltyApplied: i.penalty,
+        fromCache: i.fromCache,
+        cacheHash: i.cacheHash,
+      }));
+      await saveIncidentHistory(runId, incidentHistoryData);
+    }
 
     console.log(
       `  Incidents: ${normalized.length} total (${newCount} normalized, ${cachedCount} cached)`
@@ -164,6 +202,23 @@ const runWorkerLoop = async (deps: WorkerDependencies): Promise<WorkerRunResult>
           active_cameras: [], // TODO: Add camera integration
         });
 
+        // Save vibe score history for audit
+        const vibeScoreData: VibeScoreData = {
+          segmentId,
+          vibeScore: vibeResult.score,
+          flowScore: vibeResult.flowScore,
+          incidentPenalty: vibeResult.incidentPenalty,
+          weatherPenalty: vibeResult.weatherPenalty,
+          travelTimeSeconds: segmentData.travelTimeSeconds,
+          impliedSpeedMph: segmentData.impliedSpeedMph,
+          speedAnomalyDetected: segmentData.speedAnomalyDetected,
+          roadCondition: segmentData.roadCondition,
+          weatherSurface: segmentData.weatherSurface,
+          aiSummary: vibeResult.summary,
+          trend,
+        };
+        await saveVibeScoreHistory(runId, vibeScoreData);
+
         console.log(
           `    Vibe: ${vibeResult.score.toFixed(1)}/10, Flow: ${vibeResult.flowScore.toFixed(1)}, ` +
             `Penalties: -${vibeResult.incidentPenalty + vibeResult.weatherPenalty}, Trend: ${trend}`
@@ -180,10 +235,11 @@ const runWorkerLoop = async (deps: WorkerDependencies): Promise<WorkerRunResult>
     // 5. Cleanup old entries
     const deletedBufferEntries = await cleanupOldBufferEntries();
     const deletedCacheEntries = await cleanupOldCacheEntries();
+    const deletedAuditRuns = await cleanupOldAuditData();
 
-    if (deletedBufferEntries > 0 || deletedCacheEntries > 0) {
+    if (deletedBufferEntries > 0 || deletedCacheEntries > 0 || deletedAuditRuns > 0) {
       console.log(
-        `Cleanup: ${deletedBufferEntries} buffer entries, ${deletedCacheEntries} cache entries`
+        `Cleanup: ${deletedBufferEntries} buffer, ${deletedCacheEntries} cache, ${deletedAuditRuns} audit runs`
       );
     }
   } catch (error) {
@@ -193,6 +249,17 @@ const runWorkerLoop = async (deps: WorkerDependencies): Promise<WorkerRunResult>
   }
 
   const duration = Date.now() - startTime;
+
+  // Complete worker run record
+  await completeWorkerRun(runId, {
+    segmentsProcessed,
+    incidentsTotal,
+    incidentsNormalized,
+    incidentsCached,
+    success: errors.length === 0,
+    errors,
+    durationMs: duration,
+  });
 
   console.log(
     `[${new Date().toISOString()}] Worker completed in ${duration}ms`

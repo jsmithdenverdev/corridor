@@ -1,7 +1,23 @@
 import { eq, lt, gt, and, desc } from 'drizzle-orm';
 import { getDb } from './client';
-import { liveDashboard, statusBuffer, incidentCache } from './schema';
-import type { LiveDashboard, StatusBuffer, Trend } from '@corridor/shared';
+import {
+  liveDashboard,
+  statusBuffer,
+  incidentCache,
+  workerRun,
+  cdotSnapshot,
+  vibeScoreHistory,
+  incidentHistory,
+} from './schema';
+import type {
+  LiveDashboard,
+  StatusBuffer,
+  Trend,
+  CdotDestination,
+  CdotIncident,
+  CdotCondition,
+  CdotWeatherStation,
+} from '@corridor/shared';
 
 /**
  * Upsert live dashboard data for a segment
@@ -228,4 +244,185 @@ export async function getAllDashboardEntries(): Promise<LiveDashboard[]> {
     active_cameras: r.active_cameras ?? [],
     updated_at: r.updated_at,
   }));
+}
+
+// =============================================================================
+// Audit Trail Operations
+// =============================================================================
+
+/**
+ * Create a new worker run record
+ * Returns the run ID for correlation with other audit tables
+ */
+export async function createWorkerRun(): Promise<number> {
+  const db = getDb();
+
+  const result = await db
+    .insert(workerRun)
+    .values({
+      started_at: new Date(),
+    })
+    .returning({ id: workerRun.id });
+
+  return result[0]!.id;
+}
+
+/**
+ * Complete a worker run with final stats
+ */
+export type WorkerRunStats = {
+  segmentsProcessed: number;
+  incidentsTotal: number;
+  incidentsNormalized: number;
+  incidentsCached: number;
+  success: boolean;
+  errors: string[];
+  durationMs: number;
+};
+
+export async function completeWorkerRun(
+  runId: number,
+  stats: WorkerRunStats
+): Promise<void> {
+  const db = getDb();
+
+  await db
+    .update(workerRun)
+    .set({
+      completed_at: new Date(),
+      segments_processed: stats.segmentsProcessed,
+      incidents_total: stats.incidentsTotal,
+      incidents_normalized: stats.incidentsNormalized,
+      incidents_cached: stats.incidentsCached,
+      success: stats.success,
+      error_messages: stats.errors,
+      duration_ms: stats.durationMs,
+    })
+    .where(eq(workerRun.id, runId));
+}
+
+/**
+ * Save raw CDOT API responses for a worker run
+ */
+export type CdotRawData = {
+  destinations: CdotDestination[];
+  incidents: CdotIncident[];
+  conditions: CdotCondition[];
+  weatherStations: CdotWeatherStation[];
+};
+
+export async function saveCdotSnapshot(
+  runId: number,
+  data: CdotRawData
+): Promise<void> {
+  const db = getDb();
+
+  await db.insert(cdotSnapshot).values({
+    worker_run_id: runId,
+    destinations: data.destinations,
+    incidents: data.incidents,
+    conditions: data.conditions,
+    weather_stations: data.weatherStations,
+    fetched_at: new Date(),
+  });
+}
+
+/**
+ * Save vibe score history with full breakdown
+ */
+export type VibeScoreData = {
+  segmentId: string;
+  vibeScore: number;
+  flowScore: number;
+  incidentPenalty: number;
+  weatherPenalty: number;
+  travelTimeSeconds: number | null;
+  impliedSpeedMph: number | null;
+  speedAnomalyDetected: boolean;
+  roadCondition: string | null;
+  weatherSurface: string | null;
+  aiSummary: string | null;
+  trend: Trend;
+};
+
+export async function saveVibeScoreHistory(
+  runId: number,
+  data: VibeScoreData
+): Promise<void> {
+  const db = getDb();
+
+  await db.insert(vibeScoreHistory).values({
+    worker_run_id: runId,
+    segment_id: data.segmentId,
+    vibe_score: data.vibeScore,
+    flow_score: data.flowScore,
+    incident_penalty: data.incidentPenalty,
+    weather_penalty: data.weatherPenalty,
+    travel_time_seconds: data.travelTimeSeconds,
+    implied_speed_mph: data.impliedSpeedMph,
+    speed_anomaly_detected: data.speedAnomalyDetected,
+    road_condition: data.roadCondition,
+    weather_surface: data.weatherSurface,
+    ai_summary: data.aiSummary,
+    trend: data.trend,
+    timestamp: new Date(),
+  });
+}
+
+/**
+ * Save incident history records
+ */
+export type IncidentHistoryData = {
+  cdotIncidentId: string;
+  incidentType: string;
+  severity: 'major' | 'moderate' | 'minor';
+  startMarker: number | null;
+  endMarker: number | null;
+  originalMessage: string;
+  normalizedSummary: string;
+  penaltyApplied: number;
+  fromCache: boolean;
+  cacheHash: string | null;
+};
+
+export async function saveIncidentHistory(
+  runId: number,
+  incidents: IncidentHistoryData[]
+): Promise<void> {
+  if (incidents.length === 0) return;
+
+  const db = getDb();
+
+  await db.insert(incidentHistory).values(
+    incidents.map((i) => ({
+      worker_run_id: runId,
+      cdot_incident_id: i.cdotIncidentId,
+      incident_type: i.incidentType,
+      severity: i.severity,
+      start_marker: i.startMarker,
+      end_marker: i.endMarker,
+      original_message: i.originalMessage,
+      normalized_summary: i.normalizedSummary,
+      penalty_applied: i.penaltyApplied,
+      from_cache: i.fromCache,
+      cache_hash: i.cacheHash,
+      timestamp: new Date(),
+    }))
+  );
+}
+
+/**
+ * Cleanup old audit data (older than 7 days)
+ * Cascade deletes handle cdot_snapshot, vibe_score_history, incident_history
+ */
+export async function cleanupOldAuditData(): Promise<number> {
+  const db = getDb();
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const result = await db
+    .delete(workerRun)
+    .where(lt(workerRun.started_at, sevenDaysAgo))
+    .returning({ id: workerRun.id });
+
+  return result.length;
 }

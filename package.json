@@ -9,7 +9,7 @@
     "build:worker": "bun run --cwd apps/worker build",
     "build:web": "bun run --cwd apps/web build",
     "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push",
+    "db:push": "DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun test"
