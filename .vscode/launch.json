@@ -6,7 +6,7 @@
       "request": "launch",
       "name": "Debug Worker",
       "program": "${workspaceFolder}/apps/worker/src/index.ts",
-      "cwd": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}/apps/worker",
       "stopOnEntry": false
     },
     {

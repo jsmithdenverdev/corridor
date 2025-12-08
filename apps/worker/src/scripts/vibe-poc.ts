@@ -19,7 +19,7 @@ import type { CdotIncident } from '@corridor/shared';
  * Load environment variables from .env file at repo root
  */
 const loadEnv = async (): Promise<void> => {
-  const envPath = join(import.meta.dir, '..', '..', '..', '..', '.env');
+  const envPath = join(import.meta.dir, '..', '..', '.env');
   const envFile = file(envPath);
 
   if (await envFile.exists()) {

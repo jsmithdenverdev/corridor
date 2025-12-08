@@ -20,7 +20,7 @@ import Anthropic from '@anthropic-ai/sdk';
  * In production (Fly.io), env vars are set via secrets - this is a no-op
  */
 const loadEnv = async (): Promise<void> => {
-  const envPath = join(import.meta.dir, '..', '..', '..', '.env');
+  const envPath = join(import.meta.dir, '..', '.env');
   const envFile = file(envPath);
 
   if (await envFile.exists()) {
