@@ -1,30 +1,29 @@
-import { CDOTClient } from './client';
 import {
   CORRIDOR_SEGMENTS,
   MAX_REASONABLE_SPEED_MPH,
   getSegmentByJsonName,
-  type CdotDestination,
-  type CdotIncident,
-  type CdotCondition,
-  type CdotWeatherStation,
-  type SegmentData,
-  type CorridorSegment,
-  type NormalizedIncident,
 } from '@corridor/shared';
 
-interface AggregatorConfig {
-  apiKey: string;
-}
+import type { CdotClient } from './client';
+import type {
+  CdotDestination,
+  CdotIncident,
+  CdotCondition,
+  CdotWeatherStation,
+  SegmentData,
+  CorridorSegment,
+  NormalizedIncident,
+} from '@corridor/shared';
 
 /**
  * Raw data fetched from CDOT API
  */
-export interface CDOTRawData {
+export type CDOTRawData = {
   destinations: CdotDestination[];
   incidents: CdotIncident[];
   conditions: CdotCondition[];
   weatherStations: CdotWeatherStation[];
-}
+};
 
 /**
  * CDOT Data Aggregator
@@ -32,25 +31,61 @@ export interface CDOTRawData {
  * Fetches all data from CDOT API and matches to our watchlist segments.
  * Calculates implied speed from travel time.
  */
-export class CDOTAggregator {
-  private client: CDOTClient;
+export const createAggregator = (
+  client: Pick<
+    CdotClient,
+    'getDestinations' | 'getIncidents' | 'getRoadConditions' | 'getWeatherStations'
+  >
+) => {
+  /**
+   * Find road condition from conditions list
+   * Returns the most severe condition found
+   */
+  const findRoadCondition = (conditions: CdotCondition[]): string | null => {
+    for (const condition of conditions) {
+      const descriptions = condition.properties.currentConditions
+        .map((c) => c.conditionDescription)
+        .filter(Boolean);
 
-  constructor(config: AggregatorConfig) {
-    this.client = new CDOTClient({ apiKey: config.apiKey });
-  }
+      if (descriptions.length > 0) {
+        // Return the first non-dry condition, or first condition if all dry
+        const nonDry = descriptions.find(
+          (d) => !d.toLowerCase().includes('dry')
+        );
+        return nonDry || descriptions[0] || null;
+      }
+    }
+    return null;
+  };
+
+  /**
+   * Find road surface status from weather stations
+   */
+  const findWeatherSurface = (stations: CdotWeatherStation[]): string | null => {
+    for (const station of stations) {
+      const surfaceSensor = station.properties.sensors.find((s) =>
+        s.type.toLowerCase().includes('road surface')
+      );
+
+      if (surfaceSensor) {
+        return surfaceSensor.currentReading;
+      }
+    }
+    return null;
+  };
 
   /**
    * Fetch all raw data from CDOT API
    */
-  async fetchAllData(): Promise<CDOTRawData> {
+  const fetchAllData = async (): Promise<CDOTRawData> => {
     console.log('Fetching CDOT data from all endpoints...');
 
     const [destinations, incidents, conditions, weatherStations] =
       await Promise.all([
-        this.client.getDestinations(),
-        this.client.getIncidents(),
-        this.client.getRoadConditions(),
-        this.client.getWeatherStations(),
+        client.getDestinations(),
+        client.getIncidents(),
+        client.getRoadConditions(),
+        client.getWeatherStations(),
       ]);
 
     console.log(
@@ -59,17 +94,17 @@ export class CDOTAggregator {
     );
 
     return { destinations, incidents, conditions, weatherStations };
-  }
+  };
 
   /**
    * Process raw data into segment data for each watchlist segment
    *
    * Note: Incidents are not normalized yet - that happens in the AI step
    */
-  processSegments(
+  const processSegments = (
     rawData: CDOTRawData,
     normalizedIncidents: NormalizedIncident[]
-  ): SegmentData[] {
+  ): SegmentData[] => {
     const results: SegmentData[] = [];
 
     for (const segment of CORRIDOR_SEGMENTS) {
@@ -100,10 +135,10 @@ export class CDOTAggregator {
       }
 
       // Get road condition
-      const roadCondition = this.findRoadCondition(rawData.conditions);
+      const roadCondition = findRoadCondition(rawData.conditions);
 
       // Get weather surface status
-      const weatherSurface = this.findWeatherSurface(rawData.weatherStations);
+      const weatherSurface = findWeatherSurface(rawData.weatherStations);
 
       // Filter normalized incidents for this segment
       const segmentIncidents = normalizedIncidents.filter((inc) => {
@@ -126,56 +161,19 @@ export class CDOTAggregator {
     }
 
     return results;
-  }
+  };
 
   /**
    * Get raw incidents for normalization
    */
-  getRawIncidents(rawData: CDOTRawData): CdotIncident[] {
+  const getRawIncidents = (rawData: CDOTRawData): CdotIncident[] => {
     return rawData.incidents;
-  }
-
-  /**
-   * Find road condition from conditions list
-   * Returns the most severe condition found
-   */
-  private findRoadCondition(conditions: CdotCondition[]): string | null {
-    for (const condition of conditions) {
-      const descriptions = condition.properties.currentConditions
-        .map((c) => c.conditionDescription)
-        .filter(Boolean);
-
-      if (descriptions.length > 0) {
-        // Return the first non-dry condition, or first condition if all dry
-        const nonDry = descriptions.find(
-          (d) => !d.toLowerCase().includes('dry')
-        );
-        return nonDry || descriptions[0] || null;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Find road surface status from weather stations
-   */
-  private findWeatherSurface(stations: CdotWeatherStation[]): string | null {
-    for (const station of stations) {
-      const surfaceSensor = station.properties.sensors.find((s) =>
-        s.type.toLowerCase().includes('road surface')
-      );
-
-      if (surfaceSensor) {
-        return surfaceSensor.currentReading;
-      }
-    }
-    return null;
-  }
+  };
 
   /**
    * Build conditions summary text for AI/display
    */
-  buildConditionsSummary(segmentData: SegmentData): string {
+  const buildConditionsSummary = (segmentData: SegmentData): string => {
     const parts: string[] = [];
 
     // Travel time status
@@ -208,5 +206,14 @@ export class CDOTAggregator {
     }
 
     return parts.length > 0 ? parts.join('. ') : 'No data available';
-  }
-}
+  };
+
+  return {
+    fetchAllData,
+    processSegments,
+    getRawIncidents,
+    buildConditionsSummary,
+  };
+};
+
+export type CdotAggregator = ReturnType<typeof createAggregator>;

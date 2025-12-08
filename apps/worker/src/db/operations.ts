@@ -1,4 +1,4 @@
-import { eq, lt, and, desc, sql } from 'drizzle-orm';
+import { eq, lt, gt, and, desc } from 'drizzle-orm';
 import { getDb } from './client';
 import { liveDashboard, statusBuffer, incidentCache } from './schema';
 import type { LiveDashboard, StatusBuffer, Trend } from '@corridor/shared';
@@ -70,7 +70,7 @@ export async function getRecentBufferEntries(
     .where(
       and(
         eq(statusBuffer.segment_id, segmentId),
-        sql`${statusBuffer.timestamp} > ${cutoff}`
+        gt(statusBuffer.timestamp, cutoff)
       )
     )
     .orderBy(desc(statusBuffer.timestamp));

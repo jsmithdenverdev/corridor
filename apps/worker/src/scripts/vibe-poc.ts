@@ -6,8 +6,40 @@
  * Run with: bun run vibe-poc
  */
 
-import { IncidentNormalizer } from '../ai/client';
+import { file } from 'bun';
+import { join } from 'path';
+
+import Anthropic from '@anthropic-ai/sdk';
+
+import { createIncidentNormalizer } from '../ai/client';
+
 import type { CdotIncident } from '@corridor/shared';
+
+/**
+ * Load environment variables from .env file at repo root
+ */
+const loadEnv = async (): Promise<void> => {
+  const envPath = join(import.meta.dir, '..', '..', '..', '..', '.env');
+  const envFile = file(envPath);
+
+  if (await envFile.exists()) {
+    const content = await envFile.text();
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+
+      const eqIndex = trimmed.indexOf('=');
+      if (eqIndex === -1) continue;
+
+      const key = trimmed.slice(0, eqIndex);
+      const value = trimmed.slice(eqIndex + 1);
+
+      if (!process.env[key]) {
+        process.env[key] = value;
+      }
+    }
+  }
+};
 
 // Mock incidents with typical CDOT message formats
 const TEST_INCIDENTS: CdotIncident[] = [
@@ -68,21 +100,23 @@ const TEST_INCIDENTS: CdotIncident[] = [
 // Simple in-memory cache for POC
 const memoryCache = new Map<string, { summary: string; penalty: number }>();
 
-async function getCached(
+const getCached = async (
   hash: string
-): Promise<{ summary: string; penalty: number } | null> {
+): Promise<{ summary: string; penalty: number } | null> => {
   return memoryCache.get(hash) ?? null;
-}
+};
 
-async function setCache(
+const setCache = async (
   hash: string,
   summary: string,
   penalty: number
-): Promise<void> {
+): Promise<void> => {
   memoryCache.set(hash, { summary, penalty });
-}
+};
 
-async function main() {
+const main = async (): Promise<void> => {
+  await loadEnv();
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
 
   if (!apiKey) {
@@ -95,7 +129,9 @@ async function main() {
 
   console.log('=== Incident Normalization POC ===\n');
 
-  const normalizer = new IncidentNormalizer({ apiKey });
+  // Composition root - construct dependencies here
+  const anthropicClient = new Anthropic({ apiKey });
+  const normalizer = createIncidentNormalizer(anthropicClient);
 
   console.log('Testing incident normalization...\n');
 
@@ -127,7 +163,7 @@ async function main() {
   );
 
   console.log('\n=== POC Complete ===');
-}
+};
 
 main().catch((error) => {
   console.error('Fatal error:', error);

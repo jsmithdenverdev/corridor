@@ -6,16 +6,19 @@ import {
   CdotIncidentSchema,
   CdotConditionSchema,
   CdotWeatherStationSchema,
-  type CdotDestination,
-  type CdotIncident,
-  type CdotCondition,
-  type CdotWeatherStation,
 } from '@corridor/shared';
 
-interface CDOTClientConfig {
+import type {
+  CdotDestination,
+  CdotIncident,
+  CdotCondition,
+  CdotWeatherStation,
+} from '@corridor/shared';
+
+type CdotClientConfig = {
   apiKey: string;
   timeout?: number;
-}
+};
 
 /**
  * CDOT API Client
@@ -28,78 +31,20 @@ interface CDOTClientConfig {
  *
  * Auth: Query param ?apiKey=YOUR_KEY
  */
-export class CDOTClient {
-  private apiKey: string;
-  private timeout: number;
-
-  constructor(config: CDOTClientConfig) {
-    this.apiKey = config.apiKey;
-    this.timeout = config.timeout ?? 30000;
-  }
-
-  /**
-   * Fetch destinations (primary source for traffic flow/speed)
-   * Filter to westbound I-70 (070W in name)
-   */
-  async getDestinations(): Promise<CdotDestination[]> {
-    try {
-      const data = await this.fetchEndpoint('/destinations');
-      return this.parseDestinations(data);
-    } catch (error) {
-      console.error('Failed to fetch CDOT destinations:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Fetch incidents on I-70 westbound within corridor mile markers
-   */
-  async getIncidents(): Promise<CdotIncident[]> {
-    try {
-      const data = await this.fetchEndpoint('/incidents');
-      return this.parseIncidents(data);
-    } catch (error) {
-      console.error('Failed to fetch CDOT incidents:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Fetch road conditions for I-70
-   */
-  async getRoadConditions(): Promise<CdotCondition[]> {
-    try {
-      const data = await this.fetchEndpoint('/roadConditions');
-      return this.parseConditions(data);
-    } catch (error) {
-      console.error('Failed to fetch CDOT road conditions:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Fetch weather stations for corridor area
-   */
-  async getWeatherStations(): Promise<CdotWeatherStation[]> {
-    try {
-      const data = await this.fetchEndpoint('/weatherStations');
-      return this.parseWeatherStations(data);
-    } catch (error) {
-      console.error('Failed to fetch CDOT weather stations:', error);
-      return [];
-    }
-  }
+export const createCdotClient = (config: CdotClientConfig) => {
+  const apiKey = config.apiKey;
+  const timeout = config.timeout ?? 30000;
 
   /**
    * Fetch from CDOT API endpoint
    * Auth via query param: ?apiKey=YOUR_KEY
    */
-  private async fetchEndpoint(endpoint: string): Promise<unknown> {
+  const fetchEndpoint = async (endpoint: string): Promise<unknown> => {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
-      const url = `${CDOT_API_BASE}${endpoint}?apiKey=${this.apiKey}`;
+      const url = `${CDOT_API_BASE}${endpoint}?apiKey=${apiKey}`;
       const response = await fetch(url, {
         headers: {
           Accept: 'application/json',
@@ -121,14 +66,38 @@ export class CDOTClient {
       }
       throw error;
     }
-  }
+  };
+
+  /**
+   * Extract features array from GeoJSON response
+   */
+  const extractFeatures = (data: unknown): unknown[] => {
+    if (Array.isArray(data)) {
+      return data;
+    }
+
+    const obj = data as Record<string, unknown>;
+
+    // Standard GeoJSON FeatureCollection
+    if (Array.isArray(obj.features)) {
+      return obj.features;
+    }
+
+    // Other common wrappers
+    if (Array.isArray(obj.data)) {
+      return obj.data;
+    }
+
+    console.warn('Unexpected CDOT API response format');
+    return [];
+  };
 
   /**
    * Parse destinations response
    * Filter to westbound I-70 (070W in name)
    */
-  private parseDestinations(data: unknown): CdotDestination[] {
-    const features = this.extractFeatures(data);
+  const parseDestinations = (data: unknown): CdotDestination[] => {
+    const features = extractFeatures(data);
     const destinations: CdotDestination[] = [];
 
     for (const feature of features) {
@@ -151,14 +120,14 @@ export class CDOTClient {
     }
 
     return destinations;
-  }
+  };
 
   /**
    * Parse incidents response
    * Filter to westbound I-70 within corridor mile markers
    */
-  private parseIncidents(data: unknown): CdotIncident[] {
-    const features = this.extractFeatures(data);
+  const parseIncidents = (data: unknown): CdotIncident[] => {
+    const features = extractFeatures(data);
     const incidents: CdotIncident[] = [];
 
     for (const feature of features) {
@@ -196,14 +165,14 @@ export class CDOTClient {
     }
 
     return incidents;
-  }
+  };
 
   /**
    * Parse road conditions response
    * Filter to I-70 within corridor mile markers
    */
-  private parseConditions(data: unknown): CdotCondition[] {
-    const features = this.extractFeatures(data);
+  const parseConditions = (data: unknown): CdotCondition[] => {
+    const features = extractFeatures(data);
     const conditions: CdotCondition[] = [];
 
     for (const feature of features) {
@@ -244,15 +213,15 @@ export class CDOTClient {
     }
 
     return conditions;
-  }
+  };
 
   /**
    * Parse weather stations response
    * Filter to stations in corridor area (070W in name)
    * Only extract relevant sensors (road surface status, wind gust)
    */
-  private parseWeatherStations(data: unknown): CdotWeatherStation[] {
-    const features = this.extractFeatures(data);
+  const parseWeatherStations = (data: unknown): CdotWeatherStation[] => {
+    const features = extractFeatures(data);
     const stations: CdotWeatherStation[] = [];
 
     for (const feature of features) {
@@ -298,29 +267,67 @@ export class CDOTClient {
     }
 
     return stations;
-  }
+  };
 
   /**
-   * Extract features array from GeoJSON response
+   * Fetch destinations (primary source for traffic flow/speed)
+   * Filter to westbound I-70 (070W in name)
    */
-  private extractFeatures(data: unknown): unknown[] {
-    if (Array.isArray(data)) {
-      return data;
+  const getDestinations = async (): Promise<CdotDestination[]> => {
+    try {
+      const data = await fetchEndpoint('/destinations');
+      return parseDestinations(data);
+    } catch (error) {
+      console.error('Failed to fetch CDOT destinations:', error);
+      return [];
     }
+  };
 
-    const obj = data as Record<string, unknown>;
-
-    // Standard GeoJSON FeatureCollection
-    if (Array.isArray(obj.features)) {
-      return obj.features;
+  /**
+   * Fetch incidents on I-70 westbound within corridor mile markers
+   */
+  const getIncidents = async (): Promise<CdotIncident[]> => {
+    try {
+      const data = await fetchEndpoint('/incidents');
+      return parseIncidents(data);
+    } catch (error) {
+      console.error('Failed to fetch CDOT incidents:', error);
+      return [];
     }
+  };
 
-    // Other common wrappers
-    if (Array.isArray(obj.data)) {
-      return obj.data;
+  /**
+   * Fetch road conditions for I-70
+   */
+  const getRoadConditions = async (): Promise<CdotCondition[]> => {
+    try {
+      const data = await fetchEndpoint('/roadConditions');
+      return parseConditions(data);
+    } catch (error) {
+      console.error('Failed to fetch CDOT road conditions:', error);
+      return [];
     }
+  };
 
-    console.warn('Unexpected CDOT API response format');
-    return [];
-  }
-}
+  /**
+   * Fetch weather stations for corridor area
+   */
+  const getWeatherStations = async (): Promise<CdotWeatherStation[]> => {
+    try {
+      const data = await fetchEndpoint('/weatherStations');
+      return parseWeatherStations(data);
+    } catch (error) {
+      console.error('Failed to fetch CDOT weather stations:', error);
+      return [];
+    }
+  };
+
+  return {
+    getDestinations,
+    getIncidents,
+    getRoadConditions,
+    getWeatherStations,
+  };
+};
+
+export type CdotClient = ReturnType<typeof createCdotClient>;

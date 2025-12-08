@@ -10,8 +10,42 @@
  * 5. Cleans up old entries
  */
 
-import { CDOTAggregator } from './cdot/aggregator';
-import { IncidentNormalizer } from './ai/client';
+import { file } from 'bun';
+import { join } from 'path';
+
+import Anthropic from '@anthropic-ai/sdk';
+
+/**
+ * Load environment variables from .env file at repo root
+ * In production (Fly.io), env vars are set via secrets - this is a no-op
+ */
+const loadEnv = async (): Promise<void> => {
+  const envPath = join(import.meta.dir, '..', '..', '..', '.env');
+  const envFile = file(envPath);
+
+  if (await envFile.exists()) {
+    const content = await envFile.text();
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+
+      const eqIndex = trimmed.indexOf('=');
+      if (eqIndex === -1) continue;
+
+      const key = trimmed.slice(0, eqIndex);
+      const value = trimmed.slice(eqIndex + 1);
+
+      // Don't override existing env vars (allows CLI overrides)
+      if (!process.env[key]) {
+        process.env[key] = value;
+      }
+    }
+  }
+};
+
+import { createCdotClient } from './cdot/client';
+import { createAggregator } from './cdot/aggregator';
+import { createIncidentNormalizer } from './ai/client';
 import { calculateVibeScore } from './vibe/calculator';
 import {
   upsertLiveDashboard,
@@ -23,7 +57,10 @@ import {
   getCachedIncident,
   setCachedIncident,
 } from './db/operations';
+
 import type { WorkerRunResult } from '@corridor/shared';
+import type { CdotAggregator } from './cdot/aggregator';
+import type { IncidentNormalizer } from './ai/client';
 
 /**
  * Required environment variables
@@ -31,9 +68,17 @@ import type { WorkerRunResult } from '@corridor/shared';
 const REQUIRED_ENV = ['CDOT_API_KEY', 'ANTHROPIC_API_KEY', 'DATABASE_URL'];
 
 /**
+ * Dependencies required by the worker loop
+ */
+type WorkerDependencies = {
+  aggregator: CdotAggregator;
+  normalizer: IncidentNormalizer;
+};
+
+/**
  * Validate environment variables
  */
-function validateEnv(): void {
+const validateEnv = (): void => {
   const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
 
   if (missing.length > 0) {
@@ -42,12 +87,12 @@ function validateEnv(): void {
         'See .env.example for required configuration.'
     );
   }
-}
+};
 
 /**
  * Main worker loop
  */
-async function runWorkerLoop(): Promise<WorkerRunResult> {
+const runWorkerLoop = async (deps: WorkerDependencies): Promise<WorkerRunResult> => {
   const startTime = Date.now();
   const errors: string[] = [];
   let segmentsProcessed = 0;
@@ -56,23 +101,15 @@ async function runWorkerLoop(): Promise<WorkerRunResult> {
 
   console.log(`[${new Date().toISOString()}] Starting Corridor worker...`);
 
-  const aggregator = new CDOTAggregator({
-    apiKey: process.env.CDOT_API_KEY!,
-  });
-
-  const normalizer = new IncidentNormalizer({
-    apiKey: process.env.ANTHROPIC_API_KEY!,
-  });
-
   try {
     // 1. Fetch all CDOT data
-    const rawData = await aggregator.fetchAllData();
+    const rawData = await deps.aggregator.fetchAllData();
 
     // 2. Normalize incidents (with caching)
-    const rawIncidents = aggregator.getRawIncidents(rawData);
+    const rawIncidents = deps.aggregator.getRawIncidents(rawData);
 
     const { normalized, newCount, cachedCount } =
-      await normalizer.normalizeIncidents(
+      await deps.normalizer.normalizeIncidents(
         rawIncidents,
         getCachedIncident,
         setCachedIncident
@@ -86,7 +123,7 @@ async function runWorkerLoop(): Promise<WorkerRunResult> {
     );
 
     // 3. Process segments with normalized incidents
-    const segments = aggregator.processSegments(rawData, normalized);
+    const segments = deps.aggregator.processSegments(rawData, normalized);
 
     console.log(`Processing ${segments.length} segments...`);
 
@@ -172,15 +209,24 @@ async function runWorkerLoop(): Promise<WorkerRunResult> {
     errors,
     duration,
   };
-}
+};
 
 /**
  * Main entry point
  */
-async function main(): Promise<void> {
+const main = async (): Promise<void> => {
   try {
+    await loadEnv();
     validateEnv();
-    const result = await runWorkerLoop();
+
+    // Composition root - construct all dependencies here
+    const cdotClient = createCdotClient({ apiKey: process.env.CDOT_API_KEY! });
+    const aggregator = createAggregator(cdotClient);
+    const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+    const normalizer = createIncidentNormalizer(anthropicClient);
+
+    // Pass dependencies to worker
+    const result = await runWorkerLoop({ aggregator, normalizer });
 
     if (!result.success) {
       console.error('Worker completed with errors');
@@ -190,7 +236,7 @@ async function main(): Promise<void> {
     console.error('Fatal error:', error);
     process.exit(1);
   }
-}
+};
 
 // Run the worker
 main();
