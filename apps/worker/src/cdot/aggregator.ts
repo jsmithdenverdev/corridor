@@ -1,178 +1,219 @@
-import { CDOTClient } from './client';
 import {
-  I70_SEGMENTS,
-  getSegmentByMileMarker,
-  type SegmentData,
-  type CDOTIncident,
+  CORRIDOR_SEGMENTS,
+  MAX_REASONABLE_SPEED_MPH,
+  getSegmentByJsonName,
 } from '@corridor/shared';
 
-interface AggregatorConfig {
-  apiKey: string;
-}
+import type { CdotClient } from './client';
+import type {
+  CdotDestination,
+  CdotIncident,
+  CdotCondition,
+  CdotWeatherStation,
+  SegmentData,
+  CorridorSegment,
+  NormalizedIncident,
+} from '@corridor/shared';
 
 /**
- * Aggregates CDOT data across all defined segments
- * Handles the complexity of mapping CDOT's many small segments
- * to our defined corridor segments
+ * Raw data fetched from CDOT API
  */
-export class CDOTAggregator {
-  private client: CDOTClient;
+export type CDOTRawData = {
+  destinations: CdotDestination[];
+  incidents: CdotIncident[];
+  conditions: CdotCondition[];
+  weatherStations: CdotWeatherStation[];
+};
 
-  constructor(config: AggregatorConfig) {
-    this.client = new CDOTClient({ apiKey: config.apiKey });
-  }
+/**
+ * CDOT Data Aggregator
+ *
+ * Fetches all data from CDOT API and matches to our watchlist segments.
+ * Calculates implied speed from travel time.
+ */
+export const createAggregator = (
+  client: Pick<
+    CdotClient,
+    'getDestinations' | 'getIncidents' | 'getRoadConditions' | 'getWeatherStations'
+  >
+) => {
+  /**
+   * Find road condition from conditions list
+   * Returns the most severe condition found
+   */
+  const findRoadCondition = (conditions: CdotCondition[]): string | null => {
+    for (const condition of conditions) {
+      const descriptions = condition.properties.currentConditions
+        .map((c) => c.conditionDescription)
+        .filter(Boolean);
+
+      if (descriptions.length > 0) {
+        // Return the first non-dry condition, or first condition if all dry
+        const nonDry = descriptions.find(
+          (d) => !d.toLowerCase().includes('dry')
+        );
+        return nonDry || descriptions[0] || null;
+      }
+    }
+    return null;
+  };
 
   /**
-   * Aggregate all data for all MVP segments
+   * Find road surface status from weather stations
    */
-  async aggregateAllSegments(): Promise<Map<string, SegmentData>> {
-    console.log('Fetching CDOT data...');
-
-    // Fetch all data in parallel
-    const [incidents, speeds, conditions] = await Promise.all([
-      this.client.getIncidents(),
-      this.client.getSpeeds(),
-      this.client.getRoadConditions(),
-    ]);
-
-    console.log(
-      `  Fetched: ${incidents.length} incidents, ${speeds.size} speed segments`
-    );
-
-    const segmentDataMap = new Map<string, SegmentData>();
-
-    // Process each defined segment
-    for (const segment of Object.values(I70_SEGMENTS)) {
-      // Get cameras for this segment
-      const cameras = await this.client.getCameras([...segment.cameras]);
-
-      // Filter incidents to this segment's mile marker range
-      const segmentIncidents = incidents.filter((inc) => {
-        const mm = inc.location.mileMarker;
-        if (mm === undefined) return false;
-        return mm >= segment.mileMarkers.start && mm <= segment.mileMarkers.end;
-      });
-
-      // Calculate average speed from CDOT segments that overlap with ours
-      const avgSpeed = this.calculateAverageSpeed(speeds, segment.mileMarkers);
-
-      // Get road condition for this segment
-      const roadCondition = this.getRoadConditionForSegment(
-        conditions,
-        segment.mileMarkers
+  const findWeatherSurface = (stations: CdotWeatherStation[]): string | null => {
+    for (const station of stations) {
+      const surfaceSensor = station.properties.sensors.find((s) =>
+        s.type.toLowerCase().includes('road surface')
       );
 
-      segmentDataMap.set(segment.id, {
-        segmentId: segment.id,
-        segmentName: segment.name,
-        speed: avgSpeed,
+      if (surfaceSensor) {
+        return surfaceSensor.currentReading;
+      }
+    }
+    return null;
+  };
+
+  /**
+   * Fetch all raw data from CDOT API
+   */
+  const fetchAllData = async (): Promise<CDOTRawData> => {
+    console.log('Fetching CDOT data from all endpoints...');
+
+    const [destinations, incidents, conditions, weatherStations] =
+      await Promise.all([
+        client.getDestinations(),
+        client.getIncidents(),
+        client.getRoadConditions(),
+        client.getWeatherStations(),
+      ]);
+
+    console.log(
+      `  Fetched: ${destinations.length} destinations, ${incidents.length} incidents, ` +
+        `${conditions.length} conditions, ${weatherStations.length} weather stations`
+    );
+
+    return { destinations, incidents, conditions, weatherStations };
+  };
+
+  /**
+   * Process raw data into segment data for each watchlist segment
+   *
+   * Note: Incidents are not normalized yet - that happens in the AI step
+   */
+  const processSegments = (
+    rawData: CDOTRawData,
+    normalizedIncidents: NormalizedIncident[]
+  ): SegmentData[] => {
+    const results: SegmentData[] = [];
+
+    for (const segment of CORRIDOR_SEGMENTS) {
+      // Find matching destination by JSON name
+      const destination = rawData.destinations.find(
+        (d) => d.properties.name === segment.jsonName
+      );
+
+      // Calculate travel time and implied speed
+      let travelTimeSeconds: number | null = null;
+      let impliedSpeedMph: number | null = null;
+      let speedAnomalyDetected = false;
+
+      if (destination) {
+        travelTimeSeconds = destination.properties.travelTime;
+
+        if (travelTimeSeconds > 0) {
+          // Speed = Distance / Time (convert seconds to hours)
+          impliedSpeedMph =
+            segment.distanceMiles / (travelTimeSeconds / 3600);
+
+          // Check for "132 MPH anomaly" - bad data from CDOT
+          if (impliedSpeedMph > MAX_REASONABLE_SPEED_MPH) {
+            speedAnomalyDetected = true;
+            // Don't null out the speed - we'll handle display in frontend
+          }
+        }
+      }
+
+      // Get road condition
+      const roadCondition = findRoadCondition(rawData.conditions);
+
+      // Get weather surface status
+      const weatherSurface = findWeatherSurface(rawData.weatherStations);
+
+      // Filter normalized incidents for this segment
+      const segmentIncidents = normalizedIncidents.filter((inc) => {
+        // For now, include all incidents since we're looking at corridor-wide
+        // Could filter by segment parts if needed
+        return true;
+      });
+
+      results.push({
+        segment,
+        travelTimeSeconds,
+        impliedSpeedMph: impliedSpeedMph
+          ? Math.round(impliedSpeedMph)
+          : null,
+        speedAnomalyDetected,
         incidents: segmentIncidents,
-        cameras,
         roadCondition,
+        weatherSurface,
       });
     }
 
-    return segmentDataMap;
-  }
+    return results;
+  };
 
   /**
-   * Build incident text for AI processing
-   * Creates a natural language summary of current incidents
+   * Get raw incidents for normalization
    */
-  buildIncidentText(incidents: CDOTIncident[], roadCondition: string | null): string {
+  const getRawIncidents = (rawData: CDOTRawData): CdotIncident[] => {
+    return rawData.incidents;
+  };
+
+  /**
+   * Build conditions summary text for AI/display
+   */
+  const buildConditionsSummary = (segmentData: SegmentData): string => {
     const parts: string[] = [];
 
-    // Add road condition if available
-    if (roadCondition) {
-      parts.push(`Road Condition: ${roadCondition}`);
-    }
+    // Travel time status
+    if (segmentData.travelTimeSeconds !== null) {
+      const ratio =
+        segmentData.segment.freeFlowSeconds / segmentData.travelTimeSeconds;
 
-    // Add incidents
-    if (incidents.length === 0) {
-      parts.push('No active incidents reported.');
-    } else {
-      parts.push(`Active Incidents (${incidents.length}):`);
-      for (const inc of incidents) {
-        let incText = `- ${inc.type}: ${inc.description}`;
-        if (inc.severity) {
-          incText += ` (Severity: ${inc.severity})`;
-        }
-        if (inc.location.mileMarker) {
-          incText += ` [MM ${inc.location.mileMarker}]`;
-        }
-        parts.push(incText);
+      if (ratio >= 0.9) {
+        parts.push('Traffic flowing smoothly');
+      } else if (ratio >= 0.5) {
+        parts.push('Moderate delays');
+      } else {
+        parts.push('Significant delays');
       }
     }
 
-    return parts.join('\n');
-  }
-
-  /**
-   * Calculate average speed from overlapping CDOT speed segments
-   *
-   * CDOT splits the corridor into many small segments (sometimes 0.5-1 mile each).
-   * We need to aggregate these into our larger segment definitions.
-   */
-  private calculateAverageSpeed(
-    speeds: Map<string, { currentSpeed: number }>,
-    mileMarkers: { start: number; end: number }
-  ): number | null {
-    const relevantSpeeds: number[] = [];
-
-    for (const [segmentId, speedData] of speeds) {
-      // Parse segment ID to get mile markers (format: "start-end")
-      const match = segmentId.match(/^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/);
-      if (!match) continue;
-
-      const [, startStr, endStr] = match;
-      const segStart = parseFloat(startStr!);
-      const segEnd = parseFloat(endStr!);
-
-      // Check if this CDOT segment overlaps with our segment
-      if (segEnd >= mileMarkers.start && segStart <= mileMarkers.end) {
-        if (speedData.currentSpeed > 0) {
-          relevantSpeeds.push(speedData.currentSpeed);
-        }
-      }
+    // Road condition
+    if (segmentData.roadCondition) {
+      parts.push(`Road: ${segmentData.roadCondition}`);
     }
 
-    if (relevantSpeeds.length === 0) {
-      return null;
+    // Weather surface
+    if (segmentData.weatherSurface) {
+      parts.push(`Surface: ${segmentData.weatherSurface}`);
     }
 
-    // Return weighted average (could weight by segment length, but simple average for now)
-    return Math.round(
-      relevantSpeeds.reduce((a, b) => a + b, 0) / relevantSpeeds.length
-    );
-  }
-
-  /**
-   * Get road condition that applies to this segment
-   */
-  private getRoadConditionForSegment(
-    conditions: Map<string, string>,
-    mileMarkers: { start: number; end: number }
-  ): string | null {
-    for (const [range, condition] of conditions) {
-      const match = range.match(/^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/);
-      if (!match) continue;
-
-      const [, startStr, endStr] = match;
-      const condStart = parseFloat(startStr!);
-      const condEnd = parseFloat(endStr!);
-
-      // Check if condition range overlaps with our segment
-      if (condEnd >= mileMarkers.start && condStart <= mileMarkers.end) {
-        return condition;
-      }
+    // Incidents
+    if (segmentData.incidents.length > 0) {
+      parts.push(`${segmentData.incidents.length} active incident(s)`);
     }
 
-    return null;
-  }
-}
+    return parts.length > 0 ? parts.join('. ') : 'No data available';
+  };
 
-/**
- * Helper to get segment for a given mile marker
- * Re-exported for convenience
- */
-export { getSegmentByMileMarker };
+  return {
+    fetchAllData,
+    processSegments,
+    getRawIncidents,
+    buildConditionsSummary,
+  };
+};
+
+export type CdotAggregator = ReturnType<typeof createAggregator>;

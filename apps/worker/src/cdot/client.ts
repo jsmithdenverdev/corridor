@@ -1,383 +1,333 @@
 import {
-  CDOTIncidentSchema,
-  CDOTSpeedSchema,
-  MVP_MILE_MARKER_RANGE,
-  getCameraSnapshotUrl,
-  type CDOTIncident,
-  type CDOTSpeed,
-  type Camera,
+  CDOT_API_BASE,
+  CORRIDOR_MILE_MARKERS,
+  RELEVANT_WEATHER_SENSORS,
+  CdotDestinationSchema,
+  CdotIncidentSchema,
+  CdotConditionSchema,
+  CdotWeatherStationSchema,
 } from '@corridor/shared';
 
-/**
- * CDOT API Endpoints
- * Primary: COtrip API (https://www.cotrip.org/api/)
- *
- * Note: CDOT provides multiple API endpoints. The actual endpoints
- * may need adjustment based on your API key type and access level.
- */
-const CDOT_API_BASE = 'https://data.cotrip.org/api/v1';
-const COTRIP_API_BASE = 'https://www.cotrip.org/api';
+import type {
+  CdotDestination,
+  CdotIncident,
+  CdotCondition,
+  CdotWeatherStation,
+} from '@corridor/shared';
 
-interface CDOTClientConfig {
+type CdotClientConfig = {
   apiKey: string;
   timeout?: number;
-}
+};
 
-export class CDOTClient {
-  private apiKey: string;
-  private timeout: number;
-
-  constructor(config: CDOTClientConfig) {
-    this.apiKey = config.apiKey;
-    this.timeout = config.timeout ?? 30000;
-  }
+/**
+ * CDOT API Client
+ *
+ * Fetches data from 4 endpoints:
+ * - /destinations (traffic flow/travel times)
+ * - /incidents (crashes, closures)
+ * - /roadConditions (surface state)
+ * - /weatherStations (hyper-local weather)
+ *
+ * Auth: Query param ?apiKey=YOUR_KEY
+ */
+export const createCdotClient = (config: CdotClientConfig) => {
+  const apiKey = config.apiKey;
+  const timeout = config.timeout ?? 30000;
 
   /**
-   * Fetch current incidents on I-70 within MVP mile marker range
+   * Fetch from CDOT API endpoint
+   * Auth via query param: ?apiKey=YOUR_KEY
    */
-  async getIncidents(): Promise<CDOTIncident[]> {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+  const fetchEndpoint = async (endpoint: string): Promise<unknown> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-      const response = await fetch(
-        `${CDOT_API_BASE}/incidents?route=I-70`,
-        {
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-            Accept: 'application/json',
-          },
-          signal: controller.signal,
-        }
-      );
+    try {
+      const url = `${CDOT_API_BASE}${endpoint}?apiKey=${apiKey}`;
+      const response = await fetch(url, {
+        headers: {
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
 
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        console.error(`CDOT Incidents API error: ${response.status}`);
-        return [];
+        throw new Error(`CDOT API error: ${response.status} ${response.statusText}`);
       }
 
-      const data = await response.json();
-      return this.parseAndFilterIncidents(data);
+      return await response.json();
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        console.error('CDOT Incidents API timeout');
-      } else {
-        console.error('Failed to fetch CDOT incidents:', error);
-      }
-      return [];
-    }
-  }
-
-  /**
-   * Fetch current speed data for I-70 segments
-   */
-  async getSpeeds(): Promise<Map<string, CDOTSpeed>> {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-      const response = await fetch(
-        `${CDOT_API_BASE}/speeds?route=I-70`,
-        {
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-            Accept: 'application/json',
-          },
-          signal: controller.signal,
-        }
-      );
-
       clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        console.error(`CDOT Speeds API error: ${response.status}`);
-        return new Map();
-      }
-
-      const data = await response.json();
-      return this.parseSpeedData(data);
-    } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        console.error('CDOT Speeds API timeout');
-      } else {
-        console.error('Failed to fetch CDOT speeds:', error);
+        throw new Error(`CDOT API timeout for ${endpoint}`);
       }
-      return new Map();
+      throw error;
     }
-  }
+  };
 
   /**
-   * Get camera snapshot data for given camera IDs
-   * Uses static snapshot URLs (not M3U8 streams)
+   * Extract features array from GeoJSON response
    */
-  async getCameras(cameraIds: string[]): Promise<Camera[]> {
-    const cameras: Camera[] = [];
+  const extractFeatures = (data: unknown): unknown[] => {
+    if (Array.isArray(data)) {
+      return data;
+    }
 
-    for (const cameraId of cameraIds) {
+    const obj = data as Record<string, unknown>;
+
+    // Standard GeoJSON FeatureCollection
+    if (Array.isArray(obj.features)) {
+      return obj.features;
+    }
+
+    // Other common wrappers
+    if (Array.isArray(obj.data)) {
+      return obj.data;
+    }
+
+    console.warn('Unexpected CDOT API response format');
+    return [];
+  };
+
+  /**
+   * Parse destinations response
+   * Filter to westbound I-70 (070W in name)
+   */
+  const parseDestinations = (data: unknown): CdotDestination[] => {
+    const features = extractFeatures(data);
+    const destinations: CdotDestination[] = [];
+
+    for (const feature of features) {
       try {
-        const imageUrl = getCameraSnapshotUrl(cameraId);
+        // Filter to westbound only (070W in name)
+        const featureObj = feature as Record<string, unknown>;
+        const props = featureObj.properties as Record<string, unknown> | undefined;
+        const name = props?.name;
+        if (typeof name !== 'string' || !name.includes('070W')) {
+          continue;
+        }
 
-        // Verify the camera URL is accessible (optional - can skip for faster response)
-        // const response = await fetch(imageUrl, { method: 'HEAD' });
-        // if (!response.ok) continue;
-
-        cameras.push({
-          id: cameraId,
-          name: this.formatCameraName(cameraId),
-          imageUrl,
-          lastUpdated: new Date(),
-        });
+        const parsed = CdotDestinationSchema.safeParse(feature);
+        if (parsed.success) {
+          destinations.push(parsed.data);
+        }
       } catch (error) {
-        console.error(`Failed to fetch camera ${cameraId}:`, error);
+        // Skip invalid entries
       }
     }
 
-    return cameras;
-  }
+    return destinations;
+  };
 
   /**
-   * Fetch road conditions for I-70
+   * Parse incidents response
+   * Filter to westbound I-70 within corridor mile markers
    */
-  async getRoadConditions(): Promise<Map<string, string>> {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+  const parseIncidents = (data: unknown): CdotIncident[] => {
+    const features = extractFeatures(data);
+    const incidents: CdotIncident[] = [];
 
-      const response = await fetch(
-        `${CDOT_API_BASE}/road-conditions?route=I-70`,
-        {
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-            Accept: 'application/json',
-          },
-          signal: controller.signal,
-        }
-      );
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        console.error(`CDOT Road Conditions API error: ${response.status}`);
-        return new Map();
-      }
-
-      const data = await response.json();
-      return this.parseRoadConditions(data);
-    } catch (error) {
-      console.error('Failed to fetch road conditions:', error);
-      return new Map();
-    }
-  }
-
-  /**
-   * Parse and filter incidents to MVP mile marker range
-   */
-  private parseAndFilterIncidents(rawData: unknown): CDOTIncident[] {
-    const incidents: CDOTIncident[] = [];
-
-    if (!Array.isArray(rawData)) {
-      // Try common API response wrappers
-      const data = rawData as Record<string, unknown>;
-      if (Array.isArray(data.incidents)) {
-        return this.parseAndFilterIncidents(data.incidents);
-      }
-      if (Array.isArray(data.features)) {
-        return this.parseAndFilterIncidents(data.features);
-      }
-      console.warn('Unexpected CDOT incidents response format');
-      return [];
-    }
-
-    for (const item of rawData) {
+    for (const feature of features) {
       try {
-        // Handle GeoJSON format (common for CDOT)
-        const properties = (item as Record<string, unknown>).properties || item;
-        const geometry = (item as Record<string, unknown>).geometry as
+        const props = (feature as Record<string, unknown>).properties as
           | Record<string, unknown>
           | undefined;
 
-        const mileMarker =
-          (properties as Record<string, unknown>).mileMarker ??
-          (properties as Record<string, unknown>).startMileMarker ??
-          (properties as Record<string, unknown>).mile_marker;
+        if (!props) continue;
 
-        // Filter to MVP range
-        if (typeof mileMarker === 'number') {
-          if (
-            mileMarker < MVP_MILE_MARKER_RANGE.start ||
-            mileMarker > MVP_MILE_MARKER_RANGE.end
-          ) {
-            continue;
-          }
+        // Filter by mile marker range
+        const startMarker = props.startMarker as number | undefined;
+        const endMarker = props.endMarker as number | undefined;
+
+        if (startMarker === undefined || endMarker === undefined) continue;
+
+        // Check if incident overlaps with our corridor
+        if (
+          endMarker < CORRIDOR_MILE_MARKERS.start ||
+          startMarker > CORRIDOR_MILE_MARKERS.end
+        ) {
+          continue;
         }
 
-        // Extract coordinates
-        let latitude = 0;
-        let longitude = 0;
-        if (geometry && Array.isArray(geometry.coordinates)) {
-          [longitude, latitude] = geometry.coordinates as [number, number];
-        } else if (properties) {
-          latitude =
-            ((properties as Record<string, unknown>).latitude as number) ?? 0;
-          longitude =
-            ((properties as Record<string, unknown>).longitude as number) ?? 0;
-        }
+        // Note: Could also filter by direction field if available
+        // For now, mile marker filtering should be sufficient for westbound
 
-        const incident: CDOTIncident = {
-          id: String(
-            (properties as Record<string, unknown>).id ??
-              (properties as Record<string, unknown>).incidentId ??
-              `incident-${Date.now()}-${Math.random()}`
-          ),
-          type: String(
-            (properties as Record<string, unknown>).type ??
-              (properties as Record<string, unknown>).eventType ??
-              'Unknown'
-          ),
-          description: String(
-            (properties as Record<string, unknown>).description ??
-              (properties as Record<string, unknown>).travelerInformationMessage ??
-              ''
-          ),
-          location: {
-            latitude,
-            longitude,
-            mileMarker: typeof mileMarker === 'number' ? mileMarker : undefined,
-            route: 'I-70',
-          },
-          severity: (properties as Record<string, unknown>).severity as
-            | string
-            | undefined,
-          startTime: (properties as Record<string, unknown>).startTime
-            ? new Date(
-                (properties as Record<string, unknown>).startTime as string
-              )
-            : undefined,
-        };
-
-        // Validate with Zod
-        const parsed = CDOTIncidentSchema.safeParse(incident);
+        const parsed = CdotIncidentSchema.safeParse(feature);
         if (parsed.success) {
           incidents.push(parsed.data);
         }
       } catch (error) {
-        console.warn('Failed to parse incident:', error);
+        // Skip invalid entries
       }
     }
 
     return incidents;
-  }
+  };
 
   /**
-   * Parse speed data and map to our segments
+   * Parse road conditions response
+   * Filter to I-70 within corridor mile markers
    */
-  private parseSpeedData(rawData: unknown): Map<string, CDOTSpeed> {
-    const speedMap = new Map<string, CDOTSpeed>();
+  const parseConditions = (data: unknown): CdotCondition[] => {
+    const features = extractFeatures(data);
+    const conditions: CdotCondition[] = [];
 
-    if (!Array.isArray(rawData)) {
-      const data = rawData as Record<string, unknown>;
-      if (Array.isArray(data.speeds)) {
-        return this.parseSpeedData(data.speeds);
-      }
-      if (Array.isArray(data.features)) {
-        return this.parseSpeedData(data.features);
-      }
-      return speedMap;
-    }
-
-    for (const item of rawData) {
+    for (const feature of features) {
       try {
-        const properties = (item as Record<string, unknown>).properties || item;
+        const props = (feature as Record<string, unknown>).properties as
+          | Record<string, unknown>
+          | undefined;
 
-        const startMM =
-          ((properties as Record<string, unknown>).startMileMarker as number) ??
-          ((properties as Record<string, unknown>).beginMileMarker as number);
-        const endMM =
-          ((properties as Record<string, unknown>).endMileMarker as number) ??
-          ((properties as Record<string, unknown>).endMileMarker as number);
+        if (!props) continue;
 
-        // Filter to MVP range
-        if (startMM !== undefined && endMM !== undefined) {
+        // Filter to I-70
+        const routeName = props.routeName as string | undefined;
+        if (!routeName?.includes('I-70')) continue;
+
+        // Check if condition overlaps with our corridor
+        const primaryMP = props.primaryMP as number | undefined;
+        const secondaryMP = props.secondaryMP as number | undefined;
+
+        if (primaryMP !== undefined && secondaryMP !== undefined) {
+          const minMM = Math.min(primaryMP, secondaryMP);
+          const maxMM = Math.max(primaryMP, secondaryMP);
+
           if (
-            endMM < MVP_MILE_MARKER_RANGE.start ||
-            startMM > MVP_MILE_MARKER_RANGE.end
+            maxMM < CORRIDOR_MILE_MARKERS.start ||
+            minMM > CORRIDOR_MILE_MARKERS.end
           ) {
             continue;
           }
         }
 
-        const speed: CDOTSpeed = {
-          segmentId: String(
-            (properties as Record<string, unknown>).segmentId ??
-              `${startMM}-${endMM}`
-          ),
-          currentSpeed:
-            ((properties as Record<string, unknown>).currentSpeed as number) ??
-            ((properties as Record<string, unknown>).avgSpeed as number) ??
-            0,
-          freeFlowSpeed: (properties as Record<string, unknown>)
-            .freeFlowSpeed as number | undefined,
-          congestionLevel: (properties as Record<string, unknown>)
-            .congestionLevel as string | undefined,
-        };
-
-        const parsed = CDOTSpeedSchema.safeParse(speed);
-        if (parsed.success && parsed.data.currentSpeed > 0) {
-          speedMap.set(parsed.data.segmentId, parsed.data);
+        const parsed = CdotConditionSchema.safeParse(feature);
+        if (parsed.success) {
+          conditions.push(parsed.data);
         }
       } catch (error) {
-        console.warn('Failed to parse speed data:', error);
-      }
-    }
-
-    return speedMap;
-  }
-
-  /**
-   * Parse road conditions
-   */
-  private parseRoadConditions(rawData: unknown): Map<string, string> {
-    const conditions = new Map<string, string>();
-
-    if (!Array.isArray(rawData)) {
-      const data = rawData as Record<string, unknown>;
-      if (Array.isArray(data.conditions)) {
-        return this.parseRoadConditions(data.conditions);
-      }
-      return conditions;
-    }
-
-    for (const item of rawData) {
-      try {
-        const properties = (item as Record<string, unknown>).properties || item;
-
-        const startMM = (properties as Record<string, unknown>)
-          .startMileMarker as number;
-        const endMM = (properties as Record<string, unknown>)
-          .endMileMarker as number;
-        const condition = (properties as Record<string, unknown>)
-          .condition as string;
-
-        if (startMM !== undefined && condition) {
-          conditions.set(`${startMM}-${endMM}`, condition);
-        }
-      } catch (error) {
-        console.warn('Failed to parse road condition:', error);
+        // Skip invalid entries
       }
     }
 
     return conditions;
-  }
+  };
 
   /**
-   * Format camera ID to human-readable name
+   * Parse weather stations response
+   * Filter to stations in corridor area (070W in name)
+   * Only extract relevant sensors (road surface status, wind gust)
    */
-  private formatCameraName(cameraId: string): string {
-    return cameraId
-      .split('-')
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
-  }
-}
+  const parseWeatherStations = (data: unknown): CdotWeatherStation[] => {
+    const features = extractFeatures(data);
+    const stations: CdotWeatherStation[] = [];
+
+    for (const feature of features) {
+      try {
+        const props = (feature as Record<string, unknown>).properties as
+          | Record<string, unknown>
+          | undefined;
+
+        if (!props) continue;
+
+        // Filter to westbound corridor stations
+        const name = props.name as string | undefined;
+        if (!name?.includes('070W')) continue;
+
+        // Filter sensors to only relevant types
+        const sensors = props.sensors as Array<Record<string, unknown>> | undefined;
+        if (!sensors) continue;
+
+        const filteredSensors = sensors.filter((sensor) => {
+          const sensorType = (sensor.type as string)?.toLowerCase();
+          return RELEVANT_WEATHER_SENSORS.some((relevant) =>
+            sensorType?.includes(relevant)
+          );
+        });
+
+        // Build filtered station
+        const featureObj = feature as Record<string, unknown>;
+        const filteredFeature = {
+          ...featureObj,
+          properties: {
+            ...props,
+            sensors: filteredSensors,
+          },
+        };
+
+        const parsed = CdotWeatherStationSchema.safeParse(filteredFeature);
+        if (parsed.success) {
+          stations.push(parsed.data);
+        }
+      } catch (error) {
+        // Skip invalid entries
+      }
+    }
+
+    return stations;
+  };
+
+  /**
+   * Fetch destinations (primary source for traffic flow/speed)
+   * Filter to westbound I-70 (070W in name)
+   */
+  const getDestinations = async (): Promise<CdotDestination[]> => {
+    try {
+      const data = await fetchEndpoint('/destinations');
+      return parseDestinations(data);
+    } catch (error) {
+      console.error('Failed to fetch CDOT destinations:', error);
+      return [];
+    }
+  };
+
+  /**
+   * Fetch incidents on I-70 westbound within corridor mile markers
+   */
+  const getIncidents = async (): Promise<CdotIncident[]> => {
+    try {
+      const data = await fetchEndpoint('/incidents');
+      return parseIncidents(data);
+    } catch (error) {
+      console.error('Failed to fetch CDOT incidents:', error);
+      return [];
+    }
+  };
+
+  /**
+   * Fetch road conditions for I-70
+   */
+  const getRoadConditions = async (): Promise<CdotCondition[]> => {
+    try {
+      const data = await fetchEndpoint('/roadConditions');
+      return parseConditions(data);
+    } catch (error) {
+      console.error('Failed to fetch CDOT road conditions:', error);
+      return [];
+    }
+  };
+
+  /**
+   * Fetch weather stations for corridor area
+   */
+  const getWeatherStations = async (): Promise<CdotWeatherStation[]> => {
+    try {
+      const data = await fetchEndpoint('/weatherStations');
+      return parseWeatherStations(data);
+    } catch (error) {
+      console.error('Failed to fetch CDOT weather stations:', error);
+      return [];
+    }
+  };
+
+  return {
+    getDestinations,
+    getIncidents,
+    getRoadConditions,
+    getWeatherStations,
+  };
+};
+
+export type CdotClient = ReturnType<typeof createCdotClient>;

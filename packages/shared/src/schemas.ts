@@ -45,48 +45,111 @@ export const StatusBufferSchema = z.object({
 });
 
 /**
- * AI Vibe Check response schema (what Claude should return)
+ * AI Incident Normalization response schema
+ * Used to normalize dirty CDOT incident text
  */
-export const VibeCheckResponseSchema = z.object({
-  score: VibeScoreSchema,
+export const IncidentNormalizationSchema = z.object({
   summary: z.string().max(100),
+  penalty: z.number().min(0).max(10),
 });
 
+// =============================================================================
+// CDOT API Schemas (matching actual API response format)
+// =============================================================================
+
 /**
- * CDOT Incident from API
+ * CDOT Destination (from /destinations endpoint)
+ * Primary source for traffic flow/speed - calculate speed from travelTime
  */
-export const CDOTIncidentSchema = z.object({
-  id: z.string(),
-  type: z.string(),
-  description: z.string(),
-  location: z.object({
-    latitude: z.number(),
-    longitude: z.number(),
-    mileMarker: z.number().optional(),
-    route: z.string().optional(),
+export const CdotDestinationSchema = z.object({
+  type: z.literal('Feature'),
+  properties: z.object({
+    id: z.string(),
+    name: z.string(), // e.g., "070W224 Silverplume Chainup to Tunnel"
+    travelTime: z.number(), // IN SECONDS - critical metric
+    lastUpdated: z.string(),
+    segmentParts: z.array(
+      z.object({
+        route: z.string(), // "I-70W"
+        startMarker: z.number(),
+        endMarker: z.number(),
+      })
+    ),
   }),
-  severity: z.string().optional(),
-  startTime: z.coerce.date().optional(),
-  endTime: z.coerce.date().optional(),
 });
 
 /**
- * CDOT Speed segment data
+ * CDOT Incident (from /incidents endpoint)
+ * Note: travelerInformationMessage is dirty text - send to LLM for normalization
  */
-export const CDOTSpeedSchema = z.object({
-  segmentId: z.string(),
-  currentSpeed: z.number(),
-  freeFlowSpeed: z.number().optional(),
-  congestionLevel: z.string().optional(),
+export const CdotIncidentSchema = z.object({
+  type: z.literal('Feature'),
+  properties: z.object({
+    id: z.string(),
+    type: z.string(), // e.g., "Crash", "Safety Closure", "Traction Law Code 15"
+    severity: z.enum(['major', 'moderate', 'minor']),
+    startMarker: z.number(),
+    endMarker: z.number(),
+    travelerInformationMessage: z.string(), // RAW TEXT: "Rt Ln Clsd due to..."
+    lastUpdated: z.string(),
+  }),
 });
 
 /**
- * CDOT Road condition
+ * CDOT Road Condition (from /roadConditions endpoint)
+ * Note: Conditions are often reported in large segments
  */
-export const CDOTRoadConditionSchema = z.object({
-  route: z.string(),
-  startMileMarker: z.number(),
-  endMileMarker: z.number(),
-  condition: z.string(),
-  description: z.string().optional(),
+export const CdotConditionSchema = z.object({
+  type: z.literal('Feature'),
+  properties: z.object({
+    routeName: z.string(), // "I-70"
+    primaryMP: z.number(), // Start Mile Marker
+    secondaryMP: z.number(), // End Mile Marker
+    currentConditions: z.array(
+      z.object({
+        conditionId: z.number(),
+        conditionDescription: z.string(), // "Wet", "Icy", "Dry"
+      })
+    ),
+  }),
+});
+
+/**
+ * CDOT Weather Station sensor
+ */
+export const CdotWeatherSensorSchema = z.object({
+  type: z.string(), // "road surface status", "wind speed", "visibility"
+  currentReading: z.string(), // "Wet", "25.04", "Low"
+});
+
+/**
+ * CDOT Weather Station (from /weatherStations endpoint)
+ */
+export const CdotWeatherStationSchema = z.object({
+  type: z.literal('Feature'),
+  properties: z.object({
+    name: z.string(), // e.g., "070W214 Eisenhower Tunnel West"
+    sensors: z.array(CdotWeatherSensorSchema),
+  }),
+});
+
+/**
+ * Corridor segment configuration (watchlist)
+ */
+export const CorridorSegmentSchema = z.object({
+  logicalName: z.string(),
+  jsonName: z.string(), // Must match CDOT destination name
+  distanceMiles: z.number(),
+  freeFlowSeconds: z.number(),
+});
+
+/**
+ * Normalized incident after LLM processing
+ */
+export const NormalizedIncidentSchema = z.object({
+  id: z.string(),
+  originalMessage: z.string(),
+  summary: z.string(),
+  penalty: z.number(), // -2 for lane closure, -5 for road closure
+  severity: z.enum(['major', 'moderate', 'minor']),
 });

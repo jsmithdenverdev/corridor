@@ -1,15 +1,15 @@
-// Constants and segment definitions
+// Constants and configuration
 export {
-  I70_SEGMENTS,
-  SEGMENT_IDS,
-  MVP_MILE_MARKER_RANGE,
+  CDOT_API_BASE,
+  CORRIDOR_MILE_MARKERS,
+  CORRIDOR_SEGMENTS,
+  MAX_REASONABLE_SPEED_MPH,
+  VIBE_PENALTIES,
+  RELEVANT_WEATHER_SENSORS,
   CAMERA_BASE_URL,
-  getSegmentByMileMarker,
-  getSegmentById,
+  getSegmentByName,
+  getSegmentByJsonName,
   getCameraSnapshotUrl,
-  type SegmentKey,
-  type Segment,
-  type SegmentId,
 } from './constants';
 
 // Zod schemas for validation
@@ -19,10 +19,14 @@ export {
   CameraSchema,
   LiveDashboardSchema,
   StatusBufferSchema,
-  VibeCheckResponseSchema,
-  CDOTIncidentSchema,
-  CDOTSpeedSchema,
-  CDOTRoadConditionSchema,
+  IncidentNormalizationSchema,
+  CdotDestinationSchema,
+  CdotIncidentSchema,
+  CdotConditionSchema,
+  CdotWeatherStationSchema,
+  CdotWeatherSensorSchema,
+  CorridorSegmentSchema,
+  NormalizedIncidentSchema,
 } from './schemas';
 
 // TypeScript types
@@ -31,11 +35,17 @@ export type {
   StatusBuffer,
   Camera,
   Trend,
-  CDOTIncident,
-  CDOTSpeed,
-  CDOTRoadCondition,
-  VibeCheckResponse,
+  IncidentNormalization,
+  CdotDestination,
+  CdotIncident,
+  CdotCondition,
+  CdotWeatherStation,
+  CdotWeatherSensor,
+  CorridorSegment,
+  NormalizedIncident,
   SegmentData,
-  VibeCheckResult,
+  VibeInput,
+  VibeResult,
   WorkerRunResult,
+  IncidentCacheEntry,
 } from './types';

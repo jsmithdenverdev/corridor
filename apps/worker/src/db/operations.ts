@@ -1,6 +1,6 @@
-import { eq, lt, and, desc, sql } from 'drizzle-orm';
+import { eq, lt, gt, and, desc } from 'drizzle-orm';
 import { getDb } from './client';
-import { liveDashboard, statusBuffer } from './schema';
+import { liveDashboard, statusBuffer, incidentCache } from './schema';
 import type { LiveDashboard, StatusBuffer, Trend } from '@corridor/shared';
 
 /**
@@ -70,7 +70,7 @@ export async function getRecentBufferEntries(
     .where(
       and(
         eq(statusBuffer.segment_id, segmentId),
-        sql`${statusBuffer.timestamp} > ${cutoff}`
+        gt(statusBuffer.timestamp, cutoff)
       )
     )
     .orderBy(desc(statusBuffer.timestamp));
@@ -124,33 +124,15 @@ export function calculateTrend(entries: StatusBuffer[]): Trend {
     olderEntries.map((e) => e.vibe_score ?? 5)
   );
 
-  // Also consider speed trend
-  const avgRecentSpeed = average(
-    recentEntries.filter((e) => e.speed !== null).map((e) => e.speed!)
-  );
-  const avgOlderSpeed = average(
-    olderEntries.filter((e) => e.speed !== null).map((e) => e.speed!)
-  );
+  // Threshold for trend detection
+  const threshold = 0.5;
 
-  // Thresholds
-  const vibeThreshold = 0.5;
-  const speedThreshold = 5; // mph
-
-  // Combined analysis
-  const vibeImproving = avgRecentVibe - avgOlderVibe > vibeThreshold;
-  const vibeWorsening = avgOlderVibe - avgRecentVibe > vibeThreshold;
-  const speedImproving = avgRecentSpeed - avgOlderSpeed > speedThreshold;
-  const speedWorsening = avgOlderSpeed - avgRecentSpeed > speedThreshold;
-
-  // If both metrics agree, use that; otherwise use vibe as primary
-  if (vibeImproving && (speedImproving || avgRecentSpeed === avgOlderSpeed)) {
+  if (avgRecentVibe - avgOlderVibe > threshold) {
     return 'IMPROVING';
   }
-  if (vibeWorsening && (speedWorsening || avgRecentSpeed === avgOlderSpeed)) {
+  if (avgOlderVibe - avgRecentVibe > threshold) {
     return 'WORSENING';
   }
-  if (vibeImproving) return 'IMPROVING';
-  if (vibeWorsening) return 'WORSENING';
 
   return 'STABLE';
 }
@@ -161,6 +143,71 @@ export function calculateTrend(entries: StatusBuffer[]): Trend {
 function average(nums: number[]): number {
   if (nums.length === 0) return 0;
   return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+// =============================================================================
+// Incident Cache Operations
+// =============================================================================
+
+/**
+ * Get cached incident normalization by message hash
+ */
+export async function getCachedIncident(
+  hash: string
+): Promise<{ summary: string; penalty: number } | null> {
+  const db = getDb();
+
+  const results = await db
+    .select()
+    .from(incidentCache)
+    .where(eq(incidentCache.message_hash, hash))
+    .limit(1);
+
+  if (results.length === 0) {
+    return null;
+  }
+
+  const cached = results[0];
+  return {
+    summary: cached!.normalized_text,
+    penalty: cached!.severity_penalty,
+  };
+}
+
+/**
+ * Store incident normalization in cache
+ */
+export async function setCachedIncident(
+  hash: string,
+  summary: string,
+  penalty: number
+): Promise<void> {
+  const db = getDb();
+
+  await db
+    .insert(incidentCache)
+    .values({
+      message_hash: hash,
+      normalized_text: summary,
+      severity_penalty: penalty,
+      created_at: new Date(),
+    })
+    .onConflictDoNothing();
+}
+
+/**
+ * Cleanup old incident cache entries (older than 24 hours)
+ */
+export async function cleanupOldCacheEntries(): Promise<number> {
+  const db = getDb();
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  const result = await db
+    .delete(incidentCache)
+    .where(lt(incidentCache.created_at, cutoff))
+    .returning({ hash: incidentCache.message_hash });
+
+  return result.length;
 }
 
 /**
