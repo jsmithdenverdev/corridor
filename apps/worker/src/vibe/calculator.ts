@@ -19,7 +19,7 @@ export function calculateVibeScore(segmentData: SegmentData): VibeResult {
   // 1. Calculate Flow Score
   const flowScore = calculateFlowScore(
     segmentData.travelTimeSeconds,
-    segmentData.segment.freeFlowSeconds,
+    segmentData.segment.thresholds.freeFlowSeconds,
     segmentData.speedAnomalyDetected
   );
 

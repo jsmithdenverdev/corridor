@@ -46,6 +46,7 @@ const loadEnv = async (): Promise<void> => {
 import { createCdotClient } from './cdot/client';
 import { createAggregator } from './cdot/aggregator';
 import { createIncidentNormalizer } from './ai/client';
+import { createConfigLoader } from './config/loader';
 import { calculateVibeScore } from './vibe/calculator';
 import {
   upsertLiveDashboard,
@@ -72,7 +73,13 @@ import type { IncidentNormalizer } from './ai/client';
 /**
  * Required environment variables
  */
-const REQUIRED_ENV = ['CDOT_API_KEY', 'ANTHROPIC_API_KEY', 'DATABASE_URL'];
+const REQUIRED_ENV = [
+  'CDOT_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'DATABASE_URL',
+  'SUPABASE_URL',
+  'SUPABASE_SERVICE_KEY',
+];
 
 /**
  * Dependencies required by the worker loop
@@ -168,11 +175,10 @@ const runWorkerLoop = async (deps: WorkerDependencies): Promise<WorkerRunResult>
     // 4. Calculate vibe scores and update database
     for (const segmentData of segments) {
       try {
-        const segmentId = segmentData.segment.logicalName
-          .toLowerCase()
-          .replace(/\s+/g, '-');
+        // Use segment.id from config (already kebab-case)
+        const segmentId = segmentData.segment.id;
 
-        console.log(`  ${segmentData.segment.logicalName}...`);
+        console.log(`  ${segmentData.segment.name}...`);
 
         // Calculate vibe score (deterministic)
         const vibeResult = calculateVibeScore(segmentData);
@@ -226,7 +232,7 @@ const runWorkerLoop = async (deps: WorkerDependencies): Promise<WorkerRunResult>
 
         segmentsProcessed++;
       } catch (error) {
-        const errorMsg = `Error processing ${segmentData.segment.logicalName}: ${error}`;
+        const errorMsg = `Error processing ${segmentData.segment.name}: ${error}`;
         console.error(`    ${errorMsg}`);
         errors.push(errorMsg);
       }
@@ -286,9 +292,18 @@ const main = async (): Promise<void> => {
     await loadEnv();
     validateEnv();
 
+    // Load segment configuration from Supabase Storage
+    console.log('Loading segment configuration...');
+    const configLoader = createConfigLoader({
+      supabaseUrl: process.env.SUPABASE_URL!,
+      supabaseServiceKey: process.env.SUPABASE_SERVICE_KEY!,
+    });
+    const { segments, version } = await configLoader.loadSegments();
+    console.log(`  Loaded config v${version} with ${segments.length} segments`);
+
     // Composition root - construct all dependencies here
     const cdotClient = createCdotClient({ apiKey: process.env.CDOT_API_KEY! });
-    const aggregator = createAggregator(cdotClient);
+    const aggregator = createAggregator(cdotClient, { segments });
     const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
     const normalizer = createIncidentNormalizer(anthropicClient);
 

@@ -7,6 +7,7 @@ export const CDOT_API_BASE = 'https://data.cotrip.org/api/v1';
 
 /**
  * Mile marker range for I-70 Westbound corridor (Georgetown to Tunnel)
+ * @deprecated Use SegmentConfig.bounds from Supabase Storage config instead
  */
 export const CORRIDOR_MILE_MARKERS = {
   start: 213, // Eisenhower Tunnel
@@ -16,8 +17,8 @@ export const CORRIDOR_MILE_MARKERS = {
 /**
  * Corridor Segments Watchlist
  *
- * These are the specific CDOT destinations we track.
- * The `jsonName` must match exactly what CDOT returns in the API.
+ * @deprecated Use SegmentConfig from Supabase Storage config instead.
+ * Segments are now loaded dynamically from `config/segments.v1.json`.
  */
 export const CORRIDOR_SEGMENTS: CorridorSegment[] = [
   {
@@ -36,6 +37,7 @@ export const CORRIDOR_SEGMENTS: CorridorSegment[] = [
 
 /**
  * Get segment by logical name
+ * @deprecated Use SegmentConfig from Supabase Storage config instead
  */
 export function getSegmentByName(name: string): CorridorSegment | undefined {
   return CORRIDOR_SEGMENTS.find((s) => s.logicalName === name);
@@ -43,6 +45,7 @@ export function getSegmentByName(name: string): CorridorSegment | undefined {
 
 /**
  * Get segment by CDOT JSON name
+ * @deprecated Use SegmentConfig from Supabase Storage config instead
  */
 export function getSegmentByJsonName(
   jsonName: string
