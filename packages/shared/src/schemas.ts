@@ -25,9 +25,12 @@ export const CameraSchema = z.object({
  */
 export const LiveDashboardSchema = z.object({
   segment_id: z.string(),
+  segment_name: z.string().nullable(), // Fun name e.g., "The Gauntlet"
+  segment_subtitle: z.string().nullable(), // Geographic e.g., "Georgetown to Tunnel"
   current_speed: z.number().nullable(),
   vibe_score: VibeScoreSchema.nullable(),
-  ai_summary: z.string().nullable(),
+  ai_summary: z.string().nullable(), // Deterministic headline
+  ai_narrative: z.string().nullable(), // Claude-generated narrative
   trend: TrendSchema,
   active_cameras: z.array(CameraSchema),
   updated_at: z.coerce.date(),
@@ -92,6 +95,8 @@ export const CdotIncidentSchema = z.object({
     endMarker: z.number(),
     travelerInformationMessage: z.string(), // RAW TEXT: "Rt Ln Clsd due to..."
     lastUpdated: z.string(),
+    routeName: z.string(), // e.g., "I-70"
+    direction: z.string(), // e.g., "W", "E", "both"
   }),
 });
 
@@ -152,4 +157,62 @@ export const NormalizedIncidentSchema = z.object({
   summary: z.string(),
   penalty: z.number(), // -2 for lane closure, -5 for road closure
   severity: z.enum(['major', 'moderate', 'minor']),
+});
+
+// =============================================================================
+// Segment Configuration Schemas (for Spatial Hub)
+// =============================================================================
+
+/**
+ * Display properties for a segment
+ */
+export const SegmentDisplaySchema = z.object({
+  subtitle: z.string(),
+  direction: z.string(), // e.g., "W", "E", "both"
+  color: z.string(),
+});
+
+/**
+ * Geographic bounds for a segment
+ */
+export const SegmentBoundsSchema = z.object({
+  routeId: z.string(), // e.g., "070"
+  direction: z.string(), // e.g., "W", "E"
+  startMM: z.number(),
+  endMM: z.number(),
+});
+
+/**
+ * Data sources for a segment
+ */
+export const SegmentDataSourcesSchema = z.object({
+  destinationName: z.string(),
+});
+
+/**
+ * Performance thresholds for a segment
+ */
+export const SegmentThresholdsSchema = z.object({
+  freeFlowSeconds: z.number(),
+  criticalSeconds: z.number(),
+});
+
+/**
+ * Complete segment configuration
+ */
+export const SegmentConfigSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  display: SegmentDisplaySchema,
+  bounds: SegmentBoundsSchema,
+  dataSources: SegmentDataSourcesSchema,
+  thresholds: SegmentThresholdsSchema,
+});
+
+/**
+ * Segment configuration file structure
+ */
+export const SegmentConfigFileSchema = z.object({
+  version: z.string(),
+  segments: z.array(SegmentConfigSchema),
 });

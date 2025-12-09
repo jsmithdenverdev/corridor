@@ -1,6 +1,5 @@
 import {
   CDOT_API_BASE,
-  CORRIDOR_MILE_MARKERS,
   RELEVANT_WEATHER_SENSORS,
   CdotDestinationSchema,
   CdotIncidentSchema,
@@ -94,7 +93,7 @@ export const createCdotClient = (config: CdotClientConfig) => {
 
   /**
    * Parse destinations response
-   * Filter to westbound I-70 (070W in name)
+   * Returns all valid destinations - filtering is done by aggregator using config
    */
   const parseDestinations = (data: unknown): CdotDestination[] => {
     const features = extractFeatures(data);
@@ -102,14 +101,6 @@ export const createCdotClient = (config: CdotClientConfig) => {
 
     for (const feature of features) {
       try {
-        // Filter to westbound only (070W in name)
-        const featureObj = feature as Record<string, unknown>;
-        const props = featureObj.properties as Record<string, unknown> | undefined;
-        const name = props?.name;
-        if (typeof name !== 'string' || !name.includes('070W')) {
-          continue;
-        }
-
         const parsed = CdotDestinationSchema.safeParse(feature);
         if (parsed.success) {
           destinations.push(parsed.data);
@@ -124,7 +115,7 @@ export const createCdotClient = (config: CdotClientConfig) => {
 
   /**
    * Parse incidents response
-   * Filter to westbound I-70 within corridor mile markers
+   * Returns all valid incidents - filtering is done by aggregator using spatial matching
    */
   const parseIncidents = (data: unknown): CdotIncident[] => {
     const features = extractFeatures(data);
@@ -132,29 +123,6 @@ export const createCdotClient = (config: CdotClientConfig) => {
 
     for (const feature of features) {
       try {
-        const props = (feature as Record<string, unknown>).properties as
-          | Record<string, unknown>
-          | undefined;
-
-        if (!props) continue;
-
-        // Filter by mile marker range
-        const startMarker = props.startMarker as number | undefined;
-        const endMarker = props.endMarker as number | undefined;
-
-        if (startMarker === undefined || endMarker === undefined) continue;
-
-        // Check if incident overlaps with our corridor
-        if (
-          endMarker < CORRIDOR_MILE_MARKERS.start ||
-          startMarker > CORRIDOR_MILE_MARKERS.end
-        ) {
-          continue;
-        }
-
-        // Note: Could also filter by direction field if available
-        // For now, mile marker filtering should be sufficient for westbound
-
         const parsed = CdotIncidentSchema.safeParse(feature);
         if (parsed.success) {
           incidents.push(parsed.data);
@@ -169,7 +137,7 @@ export const createCdotClient = (config: CdotClientConfig) => {
 
   /**
    * Parse road conditions response
-   * Filter to I-70 within corridor mile markers
+   * Returns all valid conditions - filtering is done by aggregator using spatial matching
    */
   const parseConditions = (data: unknown): CdotCondition[] => {
     const features = extractFeatures(data);
@@ -177,32 +145,6 @@ export const createCdotClient = (config: CdotClientConfig) => {
 
     for (const feature of features) {
       try {
-        const props = (feature as Record<string, unknown>).properties as
-          | Record<string, unknown>
-          | undefined;
-
-        if (!props) continue;
-
-        // Filter to I-70
-        const routeName = props.routeName as string | undefined;
-        if (!routeName?.includes('I-70')) continue;
-
-        // Check if condition overlaps with our corridor
-        const primaryMP = props.primaryMP as number | undefined;
-        const secondaryMP = props.secondaryMP as number | undefined;
-
-        if (primaryMP !== undefined && secondaryMP !== undefined) {
-          const minMM = Math.min(primaryMP, secondaryMP);
-          const maxMM = Math.max(primaryMP, secondaryMP);
-
-          if (
-            maxMM < CORRIDOR_MILE_MARKERS.start ||
-            minMM > CORRIDOR_MILE_MARKERS.end
-          ) {
-            continue;
-          }
-        }
-
         const parsed = CdotConditionSchema.safeParse(feature);
         if (parsed.success) {
           conditions.push(parsed.data);
@@ -217,8 +159,8 @@ export const createCdotClient = (config: CdotClientConfig) => {
 
   /**
    * Parse weather stations response
-   * Filter to stations in corridor area (070W in name)
-   * Only extract relevant sensors (road surface status, wind gust)
+   * Returns all valid stations with relevant sensors filtered
+   * Further filtering is done by aggregator using spatial matching
    */
   const parseWeatherStations = (data: unknown): CdotWeatherStation[] => {
     const features = extractFeatures(data);
@@ -231,10 +173,6 @@ export const createCdotClient = (config: CdotClientConfig) => {
           | undefined;
 
         if (!props) continue;
-
-        // Filter to westbound corridor stations
-        const name = props.name as string | undefined;
-        if (!name?.includes('070W')) continue;
 
         // Filter sensors to only relevant types
         const sensors = props.sensors as Array<Record<string, unknown>> | undefined;
@@ -271,7 +209,6 @@ export const createCdotClient = (config: CdotClientConfig) => {
 
   /**
    * Fetch destinations (primary source for traffic flow/speed)
-   * Filter to westbound I-70 (070W in name)
    */
   const getDestinations = async (): Promise<CdotDestination[]> => {
     try {
@@ -284,7 +221,7 @@ export const createCdotClient = (config: CdotClientConfig) => {
   };
 
   /**
-   * Fetch incidents on I-70 westbound within corridor mile markers
+   * Fetch all incidents
    */
   const getIncidents = async (): Promise<CdotIncident[]> => {
     try {
@@ -297,7 +234,7 @@ export const createCdotClient = (config: CdotClientConfig) => {
   };
 
   /**
-   * Fetch road conditions for I-70
+   * Fetch all road conditions
    */
   const getRoadConditions = async (): Promise<CdotCondition[]> => {
     try {
@@ -310,7 +247,7 @@ export const createCdotClient = (config: CdotClientConfig) => {
   };
 
   /**
-   * Fetch weather stations for corridor area
+   * Fetch all weather stations
    */
   const getWeatherStations = async (): Promise<CdotWeatherStation[]> => {
     try {

@@ -54,6 +54,8 @@ const TEST_INCIDENTS: CdotIncident[] = [
       startMarker: 213,
       endMarker: 214,
       lastUpdated: new Date().toISOString(),
+      routeName: 'I-70',
+      direction: 'W',
     },
   },
   {
@@ -67,6 +69,8 @@ const TEST_INCIDENTS: CdotIncident[] = [
       startMarker: 213,
       endMarker: 226,
       lastUpdated: new Date().toISOString(),
+      routeName: 'I-70',
+      direction: 'W',
     },
   },
   {
@@ -80,6 +84,8 @@ const TEST_INCIDENTS: CdotIncident[] = [
       startMarker: 213,
       endMarker: 240,
       lastUpdated: new Date().toISOString(),
+      routeName: 'I-70',
+      direction: 'W',
     },
   },
   {
@@ -93,6 +99,8 @@ const TEST_INCIDENTS: CdotIncident[] = [
       startMarker: 227,
       endMarker: 229,
       lastUpdated: new Date().toISOString(),
+      routeName: 'I-70',
+      direction: 'W',
     },
   },
 ];

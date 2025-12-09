@@ -1,8 +1,4 @@
-import {
-  CORRIDOR_SEGMENTS,
-  MAX_REASONABLE_SPEED_MPH,
-  getSegmentByJsonName,
-} from '@corridor/shared';
+import { MAX_REASONABLE_SPEED_MPH } from '@corridor/shared';
 
 import type { CdotClient } from './client';
 import type {
@@ -11,9 +7,16 @@ import type {
   CdotCondition,
   CdotWeatherStation,
   SegmentData,
-  CorridorSegment,
+  SegmentConfig,
   NormalizedIncident,
 } from '@corridor/shared';
+
+import {
+  findDestinationForSegment,
+  findIncidentsForSegment,
+  findConditionsForSegment,
+  getWorstCondition,
+} from '../spatial/matching';
 
 /**
  * Raw data fetched from CDOT API
@@ -26,40 +29,30 @@ export type CDOTRawData = {
 };
 
 /**
+ * Aggregator configuration
+ */
+type AggregatorConfig = {
+  segments: SegmentConfig[];
+};
+
+/**
  * CDOT Data Aggregator
  *
- * Fetches all data from CDOT API and matches to our watchlist segments.
- * Calculates implied speed from travel time.
+ * Fetches all data from CDOT API and matches to configured segments
+ * using spatial correlation by Mile Markers.
  */
 export const createAggregator = (
   client: Pick<
     CdotClient,
     'getDestinations' | 'getIncidents' | 'getRoadConditions' | 'getWeatherStations'
-  >
+  >,
+  config: AggregatorConfig
 ) => {
-  /**
-   * Find road condition from conditions list
-   * Returns the most severe condition found
-   */
-  const findRoadCondition = (conditions: CdotCondition[]): string | null => {
-    for (const condition of conditions) {
-      const descriptions = condition.properties.currentConditions
-        .map((c) => c.conditionDescription)
-        .filter(Boolean);
-
-      if (descriptions.length > 0) {
-        // Return the first non-dry condition, or first condition if all dry
-        const nonDry = descriptions.find(
-          (d) => !d.toLowerCase().includes('dry')
-        );
-        return nonDry || descriptions[0] || null;
-      }
-    }
-    return null;
-  };
+  const { segments } = config;
 
   /**
    * Find road surface status from weather stations
+   * Returns the first road surface reading found
    */
   const findWeatherSurface = (stations: CdotWeatherStation[]): string | null => {
     for (const station of stations) {
@@ -97,9 +90,8 @@ export const createAggregator = (
   };
 
   /**
-   * Process raw data into segment data for each watchlist segment
-   *
-   * Note: Incidents are not normalized yet - that happens in the AI step
+   * Process raw data into segment data for each configured segment
+   * Uses spatial matching to correlate incidents and conditions to segments
    */
   const processSegments = (
     rawData: CDOTRawData,
@@ -107,24 +99,24 @@ export const createAggregator = (
   ): SegmentData[] => {
     const results: SegmentData[] = [];
 
-    for (const segment of CORRIDOR_SEGMENTS) {
-      // Find matching destination by JSON name
-      const destination = rawData.destinations.find(
-        (d) => d.properties.name === segment.jsonName
-      );
+    for (const segment of segments) {
+      // Find matching destination by exact name from config
+      const destination = findDestinationForSegment(segment, rawData.destinations);
 
       // Calculate travel time and implied speed
       let travelTimeSeconds: number | null = null;
       let impliedSpeedMph: number | null = null;
       let speedAnomalyDetected = false;
 
+      // Calculate distance from mile markers
+      const distanceMiles = Math.abs(segment.bounds.startMM - segment.bounds.endMM);
+
       if (destination) {
         travelTimeSeconds = destination.properties.travelTime;
 
         if (travelTimeSeconds > 0) {
           // Speed = Distance / Time (convert seconds to hours)
-          impliedSpeedMph =
-            segment.distanceMiles / (travelTimeSeconds / 3600);
+          impliedSpeedMph = distanceMiles / (travelTimeSeconds / 3600);
 
           // Check for "132 MPH anomaly" - bad data from CDOT
           if (impliedSpeedMph > MAX_REASONABLE_SPEED_MPH) {
@@ -134,25 +126,25 @@ export const createAggregator = (
         }
       }
 
-      // Get road condition
-      const roadCondition = findRoadCondition(rawData.conditions);
+      // Find incidents spatially within segment bounds
+      const rawIncidentsInBounds = findIncidentsForSegment(segment, rawData.incidents);
 
-      // Get weather surface status
+      // Match normalized incidents to raw incidents by ID
+      const segmentIncidents = normalizedIncidents.filter((ni) =>
+        rawIncidentsInBounds.some((raw) => raw.properties.id === ni.id)
+      );
+
+      // Find conditions spatially overlapping segment bounds
+      const segmentConditions = findConditionsForSegment(segment, rawData.conditions);
+      const roadCondition = getWorstCondition(segmentConditions);
+
+      // Get weather surface status (for now corridor-wide)
       const weatherSurface = findWeatherSurface(rawData.weatherStations);
-
-      // Filter normalized incidents for this segment
-      const segmentIncidents = normalizedIncidents.filter((inc) => {
-        // For now, include all incidents since we're looking at corridor-wide
-        // Could filter by segment parts if needed
-        return true;
-      });
 
       results.push({
         segment,
         travelTimeSeconds,
-        impliedSpeedMph: impliedSpeedMph
-          ? Math.round(impliedSpeedMph)
-          : null,
+        impliedSpeedMph: impliedSpeedMph ? Math.round(impliedSpeedMph) : null,
         speedAnomalyDetected,
         incidents: segmentIncidents,
         roadCondition,
@@ -165,9 +157,24 @@ export const createAggregator = (
 
   /**
    * Get raw incidents for normalization
+   * Returns all incidents that fall within any configured segment
    */
   const getRawIncidents = (rawData: CDOTRawData): CdotIncident[] => {
-    return rawData.incidents;
+    // Collect incidents from all segments
+    const incidentIds = new Set<string>();
+    const result: CdotIncident[] = [];
+
+    for (const segment of segments) {
+      const segmentIncidents = findIncidentsForSegment(segment, rawData.incidents);
+      for (const incident of segmentIncidents) {
+        if (!incidentIds.has(incident.properties.id)) {
+          incidentIds.add(incident.properties.id);
+          result.push(incident);
+        }
+      }
+    }
+
+    return result;
   };
 
   /**
@@ -178,8 +185,8 @@ export const createAggregator = (
 
     // Travel time status
     if (segmentData.travelTimeSeconds !== null) {
-      const ratio =
-        segmentData.segment.freeFlowSeconds / segmentData.travelTimeSeconds;
+      const freeFlowSeconds = segmentData.segment.thresholds.freeFlowSeconds;
+      const ratio = freeFlowSeconds / segmentData.travelTimeSeconds;
 
       if (ratio >= 0.9) {
         parts.push('Traffic flowing smoothly');

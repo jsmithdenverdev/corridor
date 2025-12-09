@@ -27,6 +27,12 @@ export {
   CdotWeatherSensorSchema,
   CorridorSegmentSchema,
   NormalizedIncidentSchema,
+  SegmentDisplaySchema,
+  SegmentBoundsSchema,
+  SegmentDataSourcesSchema,
+  SegmentThresholdsSchema,
+  SegmentConfigSchema,
+  SegmentConfigFileSchema,
 } from './schemas';
 
 // TypeScript types
@@ -43,9 +49,17 @@ export type {
   CdotWeatherSensor,
   CorridorSegment,
   NormalizedIncident,
+  SegmentDisplay,
+  SegmentBounds,
+  SegmentDataSources,
+  SegmentThresholds,
+  SegmentConfig,
+  SegmentConfigFile,
   SegmentData,
   VibeInput,
   VibeResult,
   WorkerRunResult,
   IncidentCacheEntry,
+  NarrativeSummaryInput,
+  NarrativeSummaryResult,
 } from './types';

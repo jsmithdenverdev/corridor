@@ -163,9 +163,25 @@ body {
   margin-bottom: var(--spacing-sm);
 }
 
-.segment-name {
-  font-size: 18px;
+.segment-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0; /* Allow text truncation */
+  flex: 1;
+  margin-right: var(--spacing-sm);
+}
+
+.segment-title {
+  font-size: 17px;
   font-weight: 600;
+  line-height: 1.2;
+}
+
+.segment-nickname {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-style: italic;
 }
 
 .vibe-badge {
@@ -214,11 +230,22 @@ body {
   text-transform: capitalize;
 }
 
-.ai-summary {
-  font-size: 14px;
-  color: var(--text-secondary);
+/* AI Content - Headline + Narrative */
+.ai-content {
   margin-bottom: var(--spacing-sm);
-  font-style: italic;
+}
+
+.ai-headline {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--spacing-xs);
+}
+
+.ai-narrative {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 /* Camera Previews */

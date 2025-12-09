@@ -24,9 +24,14 @@ export function SegmentCard({ segment }: SegmentCardProps) {
       style={{ borderLeftColor: vibeColor }}
     >
       <div className="segment-header">
-        <h2 className="segment-name">
-          {formatSegmentName(segment.segment_id)}
-        </h2>
+        <div className="segment-header-text">
+          <h2 className="segment-title">
+            {segment.segment_subtitle || formatSegmentName(segment.segment_id)}
+          </h2>
+          {segment.segment_name && (
+            <span className="segment-nickname">{segment.segment_name}</span>
+          )}
+        </div>
         <div
           className="vibe-badge"
           style={{ backgroundColor: vibeColor }}
@@ -55,8 +60,15 @@ export function SegmentCard({ segment }: SegmentCardProps) {
         </div>
       </div>
 
-      {segment.ai_summary && (
-        <p className="ai-summary">{segment.ai_summary}</p>
+      {(segment.ai_summary || segment.ai_narrative) && (
+        <div className="ai-content">
+          {segment.ai_summary && (
+            <p className="ai-headline">{segment.ai_summary}</p>
+          )}
+          {segment.ai_narrative && (
+            <p className="ai-narrative">{segment.ai_narrative}</p>
+          )}
+        </div>
       )}
 
       {segment.active_cameras.length > 0 && (
