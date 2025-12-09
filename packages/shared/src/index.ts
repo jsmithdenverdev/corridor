@@ -60,4 +60,6 @@ export type {
   VibeResult,
   WorkerRunResult,
   IncidentCacheEntry,
+  NarrativeSummaryInput,
+  NarrativeSummaryResult,
 } from './types';

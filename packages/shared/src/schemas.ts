@@ -25,9 +25,12 @@ export const CameraSchema = z.object({
  */
 export const LiveDashboardSchema = z.object({
   segment_id: z.string(),
+  segment_name: z.string().nullable(), // Fun name e.g., "The Gauntlet"
+  segment_subtitle: z.string().nullable(), // Geographic e.g., "Georgetown to Tunnel"
   current_speed: z.number().nullable(),
   vibe_score: VibeScoreSchema.nullable(),
-  ai_summary: z.string().nullable(),
+  ai_summary: z.string().nullable(), // Deterministic headline
+  ai_narrative: z.string().nullable(), // Claude-generated narrative
   trend: TrendSchema,
   active_cameras: z.array(CameraSchema),
   updated_at: z.coerce.date(),

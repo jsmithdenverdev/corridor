@@ -46,6 +46,7 @@ const loadEnv = async (): Promise<void> => {
 import { createCdotClient } from './cdot/client';
 import { createAggregator } from './cdot/aggregator';
 import { createIncidentNormalizer } from './ai/client';
+import { createSummaryGenerator } from './ai/summaryGenerator';
 import { createConfigLoader } from './config/loader';
 import { calculateVibeScore } from './vibe/calculator';
 import {
@@ -54,10 +55,13 @@ import {
   getRecentBufferEntries,
   cleanupOldBufferEntries,
   cleanupOldCacheEntries,
+  cleanupOldNarrativeCacheEntries,
   cleanupOldAuditData,
   calculateTrend,
   getCachedIncident,
   setCachedIncident,
+  getCachedNarrative,
+  setCachedNarrative,
   createWorkerRun,
   completeWorkerRun,
   saveCdotSnapshot,
@@ -66,9 +70,10 @@ import {
 } from './db/operations';
 import type { IncidentHistoryData, VibeScoreData } from './db/operations';
 
-import type { WorkerRunResult } from '@corridor/shared';
+import type { WorkerRunResult, NarrativeSummaryInput } from '@corridor/shared';
 import type { CdotAggregator } from './cdot/aggregator';
 import type { IncidentNormalizer } from './ai/client';
+import type { SummaryGenerator } from './ai/summaryGenerator';
 
 /**
  * Required environment variables
@@ -87,6 +92,7 @@ const REQUIRED_ENV = [
 type WorkerDependencies = {
   aggregator: CdotAggregator;
   normalizer: IncidentNormalizer;
+  summaryGenerator: SummaryGenerator;
 };
 
 /**
@@ -187,6 +193,26 @@ const runWorkerLoop = async (deps: WorkerDependencies): Promise<WorkerRunResult>
         const recentEntries = await getRecentBufferEntries(segmentId);
         const trend = calculateTrend(recentEntries);
 
+        // Generate AI narrative
+        const narrativeInput: NarrativeSummaryInput = {
+          segmentName: segmentData.segment.name,
+          vibeScore: vibeResult.score,
+          flowScore: vibeResult.flowScore,
+          travelTimeSeconds: segmentData.travelTimeSeconds,
+          impliedSpeedMph: segmentData.impliedSpeedMph,
+          speedAnomalyDetected: segmentData.speedAnomalyDetected,
+          incidents: segmentData.incidents,
+          roadCondition: segmentData.roadCondition,
+          weatherSurface: segmentData.weatherSurface,
+          trend,
+        };
+
+        const narrativeResult = await deps.summaryGenerator.generateNarrative(
+          narrativeInput,
+          getCachedNarrative,
+          setCachedNarrative
+        );
+
         // Insert into status buffer
         await insertStatusBuffer({
           segment_id: segmentId,
@@ -199,11 +225,15 @@ const runWorkerLoop = async (deps: WorkerDependencies): Promise<WorkerRunResult>
         // Update live dashboard
         await upsertLiveDashboard({
           segment_id: segmentId,
+          segment_name: segmentData.segment.name,
+          segment_subtitle: segmentData.segment.display.subtitle,
           current_speed: segmentData.speedAnomalyDetected
             ? null
             : segmentData.impliedSpeedMph,
           vibe_score: vibeResult.score,
           ai_summary: vibeResult.summary,
+          ai_narrative: narrativeResult.narrative || null,
+          narrative_hash: narrativeResult.hash,
           trend,
           active_cameras: [], // TODO: Add camera integration
         });
@@ -221,13 +251,16 @@ const runWorkerLoop = async (deps: WorkerDependencies): Promise<WorkerRunResult>
           roadCondition: segmentData.roadCondition,
           weatherSurface: segmentData.weatherSurface,
           aiSummary: vibeResult.summary,
+          aiNarrative: narrativeResult.narrative || null,
+          narrativeHash: narrativeResult.hash,
           trend,
         };
         await saveVibeScoreHistory(runId, vibeScoreData);
 
         console.log(
           `    Vibe: ${vibeResult.score.toFixed(1)}/10, Flow: ${vibeResult.flowScore.toFixed(1)}, ` +
-            `Penalties: -${vibeResult.incidentPenalty + vibeResult.weatherPenalty}, Trend: ${trend}`
+            `Penalties: -${vibeResult.incidentPenalty + vibeResult.weatherPenalty}, Trend: ${trend}` +
+            (narrativeResult.fromCache ? ' (narrative cached)' : '')
         );
 
         segmentsProcessed++;
@@ -241,11 +274,12 @@ const runWorkerLoop = async (deps: WorkerDependencies): Promise<WorkerRunResult>
     // 5. Cleanup old entries
     const deletedBufferEntries = await cleanupOldBufferEntries();
     const deletedCacheEntries = await cleanupOldCacheEntries();
+    const deletedNarrativeCacheEntries = await cleanupOldNarrativeCacheEntries();
     const deletedAuditRuns = await cleanupOldAuditData();
 
-    if (deletedBufferEntries > 0 || deletedCacheEntries > 0 || deletedAuditRuns > 0) {
+    if (deletedBufferEntries > 0 || deletedCacheEntries > 0 || deletedNarrativeCacheEntries > 0 || deletedAuditRuns > 0) {
       console.log(
-        `Cleanup: ${deletedBufferEntries} buffer, ${deletedCacheEntries} cache, ${deletedAuditRuns} audit runs`
+        `Cleanup: ${deletedBufferEntries} buffer, ${deletedCacheEntries} incident cache, ${deletedNarrativeCacheEntries} narrative cache, ${deletedAuditRuns} audit runs`
       );
     }
   } catch (error) {
@@ -306,9 +340,10 @@ const main = async (): Promise<void> => {
     const aggregator = createAggregator(cdotClient, { segments });
     const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
     const normalizer = createIncidentNormalizer(anthropicClient);
+    const summaryGenerator = createSummaryGenerator(anthropicClient);
 
     // Pass dependencies to worker
-    const result = await runWorkerLoop({ aggregator, normalizer });
+    const result = await runWorkerLoop({ aggregator, normalizer, summaryGenerator });
 
     if (!result.success) {
       console.error('Worker completed with errors');

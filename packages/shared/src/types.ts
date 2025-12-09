@@ -104,3 +104,28 @@ export type IncidentCacheEntry = {
   severityPenalty: number;
   createdAt: Date;
 };
+
+/**
+ * Input for AI narrative generation
+ */
+export type NarrativeSummaryInput = {
+  segmentName: string;
+  vibeScore: number;
+  flowScore: number;
+  travelTimeSeconds: number | null;
+  impliedSpeedMph: number | null;
+  speedAnomalyDetected: boolean;
+  incidents: NormalizedIncident[];
+  roadCondition: string | null;
+  weatherSurface: string | null;
+  trend: Trend;
+};
+
+/**
+ * Result from AI narrative generation
+ */
+export type NarrativeSummaryResult = {
+  narrative: string;
+  hash: string;
+  fromCache: boolean;
+};

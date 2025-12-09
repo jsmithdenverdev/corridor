@@ -25,9 +25,13 @@ export const liveDashboard = pgTable(
   'live_dashboard',
   {
     segment_id: text('segment_id').primaryKey(),
+    segment_name: text('segment_name'), // Fun name e.g., "The Gauntlet"
+    segment_subtitle: text('segment_subtitle'), // Geographic e.g., "Georgetown to Tunnel"
     current_speed: real('current_speed'),
     vibe_score: real('vibe_score'), // 0-10 scale
-    ai_summary: text('ai_summary'),
+    ai_summary: text('ai_summary'), // Deterministic headline
+    ai_narrative: text('ai_narrative'), // Claude-generated narrative
+    narrative_hash: text('narrative_hash'), // For cache invalidation
     trend: text('trend', { enum: ['IMPROVING', 'WORSENING', 'STABLE'] })
       .notNull()
       .default('STABLE'),
@@ -72,6 +76,18 @@ export const incidentCache = pgTable('incident_cache', {
   message_hash: text('message_hash').primaryKey(),
   normalized_text: text('normalized_text').notNull(),
   severity_penalty: real('severity_penalty').notNull(),
+  created_at: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
+ * Narrative Cache - LLM cost control for AI summaries
+ * Stores generated narratives by data hash to avoid re-processing
+ */
+export const narrativeCache = pgTable('narrative_cache', {
+  data_hash: text('data_hash').primaryKey(),
+  narrative: text('narrative').notNull(),
   created_at: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -162,7 +178,9 @@ export const vibeScoreHistory = pgTable(
     road_condition: text('road_condition'),
     weather_surface: text('weather_surface'),
 
-    ai_summary: text('ai_summary'),
+    ai_summary: text('ai_summary'), // Deterministic headline
+    ai_narrative: text('ai_narrative'), // Claude-generated narrative
+    narrative_hash: text('narrative_hash'), // Cache key
     trend: text('trend', { enum: ['IMPROVING', 'WORSENING', 'STABLE'] }),
     timestamp: timestamp('timestamp', { withTimezone: true })
       .notNull()
@@ -219,6 +237,8 @@ export type StatusBufferRecord = typeof statusBuffer.$inferSelect;
 export type StatusBufferInsert = typeof statusBuffer.$inferInsert;
 export type IncidentCacheRecord = typeof incidentCache.$inferSelect;
 export type IncidentCacheInsert = typeof incidentCache.$inferInsert;
+export type NarrativeCacheRecord = typeof narrativeCache.$inferSelect;
+export type NarrativeCacheInsert = typeof narrativeCache.$inferInsert;
 export type WorkerRunRecord = typeof workerRun.$inferSelect;
 export type WorkerRunInsert = typeof workerRun.$inferInsert;
 export type CdotSnapshotRecord = typeof cdotSnapshot.$inferSelect;

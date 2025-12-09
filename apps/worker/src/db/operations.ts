@@ -4,6 +4,7 @@ import {
   liveDashboard,
   statusBuffer,
   incidentCache,
+  narrativeCache,
   workerRun,
   cdotSnapshot,
   vibeScoreHistory,
@@ -20,11 +21,18 @@ import type {
 } from '@corridor/shared';
 
 /**
+ * Extended dashboard data with narrative and display fields
+ */
+type DashboardUpsertData = Omit<LiveDashboard, 'updated_at'> & {
+  narrative_hash?: string | null;
+};
+
+/**
  * Upsert live dashboard data for a segment
  * Uses PostgreSQL ON CONFLICT for atomic upsert
  */
 export async function upsertLiveDashboard(
-  data: Omit<LiveDashboard, 'updated_at'>
+  data: DashboardUpsertData
 ): Promise<void> {
   const db = getDb();
 
@@ -32,9 +40,13 @@ export async function upsertLiveDashboard(
     .insert(liveDashboard)
     .values({
       segment_id: data.segment_id,
+      segment_name: data.segment_name,
+      segment_subtitle: data.segment_subtitle,
       current_speed: data.current_speed,
       vibe_score: data.vibe_score,
       ai_summary: data.ai_summary,
+      ai_narrative: data.ai_narrative,
+      narrative_hash: data.narrative_hash,
       trend: data.trend,
       active_cameras: data.active_cameras,
       updated_at: new Date(),
@@ -42,9 +54,13 @@ export async function upsertLiveDashboard(
     .onConflictDoUpdate({
       target: liveDashboard.segment_id,
       set: {
+        segment_name: data.segment_name,
+        segment_subtitle: data.segment_subtitle,
         current_speed: data.current_speed,
         vibe_score: data.vibe_score,
         ai_summary: data.ai_summary,
+        ai_narrative: data.ai_narrative,
+        narrative_hash: data.narrative_hash,
         trend: data.trend,
         active_cameras: data.active_cameras,
         updated_at: new Date(),
@@ -226,6 +242,65 @@ export async function cleanupOldCacheEntries(): Promise<number> {
   return result.length;
 }
 
+// =============================================================================
+// Narrative Cache Operations
+// =============================================================================
+
+/**
+ * Get cached narrative by data hash
+ */
+export async function getCachedNarrative(
+  hash: string
+): Promise<string | null> {
+  const db = getDb();
+
+  const results = await db
+    .select()
+    .from(narrativeCache)
+    .where(eq(narrativeCache.data_hash, hash))
+    .limit(1);
+
+  if (results.length === 0) {
+    return null;
+  }
+
+  return results[0]!.narrative;
+}
+
+/**
+ * Store narrative in cache
+ */
+export async function setCachedNarrative(
+  hash: string,
+  narrative: string
+): Promise<void> {
+  const db = getDb();
+
+  await db
+    .insert(narrativeCache)
+    .values({
+      data_hash: hash,
+      narrative,
+      created_at: new Date(),
+    })
+    .onConflictDoNothing();
+}
+
+/**
+ * Cleanup old narrative cache entries (older than 24 hours)
+ */
+export async function cleanupOldNarrativeCacheEntries(): Promise<number> {
+  const db = getDb();
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  const result = await db
+    .delete(narrativeCache)
+    .where(lt(narrativeCache.created_at, cutoff))
+    .returning({ hash: narrativeCache.data_hash });
+
+  return result.length;
+}
+
 /**
  * Get all current dashboard entries
  * Useful for debugging and health checks
@@ -237,9 +312,12 @@ export async function getAllDashboardEntries(): Promise<LiveDashboard[]> {
 
   return results.map((r) => ({
     segment_id: r.segment_id,
+    segment_name: r.segment_name,
+    segment_subtitle: r.segment_subtitle,
     current_speed: r.current_speed,
     vibe_score: r.vibe_score,
     ai_summary: r.ai_summary,
+    ai_narrative: r.ai_narrative,
     trend: r.trend as Trend,
     active_cameras: r.active_cameras ?? [],
     updated_at: r.updated_at,
@@ -342,6 +420,8 @@ export type VibeScoreData = {
   roadCondition: string | null;
   weatherSurface: string | null;
   aiSummary: string | null;
+  aiNarrative: string | null;
+  narrativeHash: string | null;
   trend: Trend;
 };
 
@@ -364,6 +444,8 @@ export async function saveVibeScoreHistory(
     road_condition: data.roadCondition,
     weather_surface: data.weatherSurface,
     ai_summary: data.aiSummary,
+    ai_narrative: data.aiNarrative,
+    narrative_hash: data.narrativeHash,
     trend: data.trend,
     timestamp: new Date(),
   });

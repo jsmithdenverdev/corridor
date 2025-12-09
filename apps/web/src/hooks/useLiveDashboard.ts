@@ -33,9 +33,12 @@ export function useLiveDashboard(): DashboardState & { refresh: () => void } {
       // Transform database records to our type
       const segments: LiveDashboard[] = (data || []).map((row) => ({
         segment_id: row.segment_id,
+        segment_name: row.segment_name,
+        segment_subtitle: row.segment_subtitle,
         current_speed: row.current_speed,
         vibe_score: row.vibe_score,
         ai_summary: row.ai_summary,
+        ai_narrative: row.ai_narrative,
         trend: row.trend as Trend,
         active_cameras: (row.active_cameras as Camera[]) || [],
         updated_at: new Date(row.updated_at),
@@ -76,9 +79,12 @@ export function useLiveDashboard(): DashboardState & { refresh: () => void } {
 
             const segment: LiveDashboard = {
               segment_id: newRecord.segment_id as string,
+              segment_name: newRecord.segment_name as string | null,
+              segment_subtitle: newRecord.segment_subtitle as string | null,
               current_speed: newRecord.current_speed as number | null,
               vibe_score: newRecord.vibe_score as number | null,
               ai_summary: newRecord.ai_summary as string | null,
+              ai_narrative: newRecord.ai_narrative as string | null,
               trend: newRecord.trend as Trend,
               active_cameras: (newRecord.active_cameras as Camera[]) || [],
               updated_at: new Date(newRecord.updated_at as string),
